@@ -1,13 +1,17 @@
-// Command az-devops-token prints a cached Microsoft Entra access token for the
-// internal Azure DevOps Artifacts feeds (usable as an npm _authToken or a NuGet
-// feed password).
+// Command az-devops-token authenticates the internal Azure DevOps Artifacts
+// feeds via a Microsoft Entra access token.
 //
-// It shells out to the Azure CLI for the actual authentication, so the login
-// session and refresh token stay in az's secure store — this tool only caches
-// the short-lived access token, to avoid az's startup cost on every mise
-// `[env]` evaluation (which runs on every shimmed command). It always exits 0:
-// a missing or unauthenticated az must not hard-error mise's config load, so on
-// failure it prints nothing and consumers degrade to a clean 401.
+// With no arguments it prints a cached token (usable as an npm _authToken or a
+// NuGet feed password), shelling out to the Azure CLI so the login session and
+// refresh token stay in az's store — it only caches the short-lived access
+// token, to avoid az's startup cost on every mise `[env]` evaluation. In that
+// mode it always exits 0: a missing or unauthenticated az must not hard-error
+// mise's config load, so on failure it prints nothing and consumers get a
+// clean 401.
+//
+// The `login` subcommand ensures an az session (interactive if needed) and is
+// meant for a one-time setup step — where `[env]` can't run, since it must stay
+// silent and non-interactive on every shimmed command.
 package main
 
 import (
@@ -63,18 +67,17 @@ func fromCache(path string) (string, bool) {
 	return t.AccessToken, true
 }
 
-// azCommand returns the command that fetches a token. On Windows the mise pipx
-// install of azure-cli ships an `az.bat` wrapper that can't find its venv
-// Python under uv's layout, so call the venv Python's azure.cli module directly
-// (bypassing the broken wrapper). Everywhere else, `az` works as-is.
-func azCommand() (string, []string) {
-	base := []string{"account", "get-access-token", "--resource", adoResource, "--output", "json"}
+// azCmd builds an `az <args...>` invocation. On Windows the mise pipx install of
+// azure-cli ships an `az.bat` wrapper that can't find its venv Python under uv's
+// layout, so call that Python's azure.cli module directly (bypassing the broken
+// wrapper). Everywhere else, `az` works as-is.
+func azCmd(args ...string) *exec.Cmd {
 	if runtime.GOOS == "windows" {
 		if py := azureCliPython(); py != "" {
-			return py, append([]string{"-m", "azure.cli"}, base...)
+			return exec.Command(py, append([]string{"-m", "azure.cli"}, args...)...)
 		}
 	}
-	return "az", base
+	return exec.Command("az", args...)
 }
 
 // azureCliPython locates azure-cli's venv Python via mise. `--no-env` skips
@@ -92,8 +95,7 @@ func azureCliPython() string {
 }
 
 func fromAz() (token, bool) {
-	name, args := azCommand()
-	out, err := exec.Command(name, args...).Output()
+	out, err := azCmd("account", "get-access-token", "--resource", adoResource, "--output", "json").Output()
 	if err != nil {
 		return token{}, false
 	}
@@ -128,7 +130,30 @@ func store(path string, t token) {
 	_ = os.Rename(tmp, path)
 }
 
+// login ensures an az session that can mint feed tokens, prompting
+// interactively only when one isn't already present. Intended for a one-time
+// setup step. The "signed in?" check tests token acquisition directly, which
+// is more precise than `az account show` for accounts without a subscription.
+func login() int {
+	if azCmd("account", "get-access-token", "--resource", adoResource).Run() == nil {
+		return 0 // already able to get a token
+	}
+	// --allow-no-subscriptions: EWN accounts commonly have Azure DevOps access
+	// without an Azure subscription, which a plain `az login` rejects.
+	c := azCmd("login", "--allow-no-subscriptions")
+	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := c.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "az-devops-token: login failed: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "login" {
+		os.Exit(login())
+	}
+
 	path := cachePath()
 	if tok, ok := fromCache(path); ok {
 		fmt.Print(tok)
@@ -139,5 +164,5 @@ func main() {
 		fmt.Print(t.AccessToken)
 		return
 	}
-	fmt.Fprintln(os.Stderr, "az-devops-token: no token — is az installed and logged in?")
+	fmt.Fprintln(os.Stderr, "az-devops-token: no token — run `az-devops-token login`")
 }
