@@ -4,7 +4,7 @@
 //
 // It shells out to the Azure CLI for the actual authentication, so the login
 // session and refresh token stay in az's secure store — this tool only caches
-// the short-lived access token, to avoid az's ~660ms startup on every mise
+// the short-lived access token, to avoid az's startup cost on every mise
 // `[env]` evaluation (which runs on every shimmed command). It always exits 0:
 // a missing or unauthenticated az must not hard-error mise's config load, so on
 // failure it prints nothing and consumers degrade to a clean 401.
@@ -16,6 +16,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"time"
 )
 
@@ -61,18 +63,43 @@ func fromCache(path string) (string, bool) {
 	return t.AccessToken, true
 }
 
-// fromAz runs `az account get-access-token`. az's JSON carries `expires_on`
-// (unix seconds) on current versions; fall back to a conservative TTL if it's
-// absent so caching still works on older az.
+// azCommand returns the command that fetches a token. On Windows the mise pipx
+// install of azure-cli ships an `az.bat` wrapper that can't find its venv
+// Python under uv's layout, so call the venv Python's azure.cli module directly
+// (bypassing the broken wrapper). Everywhere else, `az` works as-is.
+func azCommand() (string, []string) {
+	base := []string{"account", "get-access-token", "--resource", adoResource, "--output", "json"}
+	if runtime.GOOS == "windows" {
+		if py := azureCliPython(); py != "" {
+			return py, append([]string{"-m", "azure.cli"}, base...)
+		}
+	}
+	return "az", base
+}
+
+// azureCliPython locates azure-cli's venv Python via mise. `--no-env` skips
+// re-evaluating `[env]`, which would recurse back into this binary.
+func azureCliPython() string {
+	out, err := exec.Command("mise", "--no-env", "where", "pipx:azure-cli").Output()
+	if err != nil {
+		return ""
+	}
+	py := filepath.Join(strings.TrimSpace(string(out)), "azure-cli", "Scripts", "python.exe")
+	if _, err := os.Stat(py); err != nil {
+		return ""
+	}
+	return py
+}
+
 func fromAz() (token, bool) {
-	out, err := exec.Command("az", "account", "get-access-token",
-		"--resource", adoResource, "--output", "json").Output()
+	name, args := azCommand()
+	out, err := exec.Command(name, args...).Output()
 	if err != nil {
 		return token{}, false
 	}
 	var raw struct {
 		AccessToken string `json:"accessToken"`
-		ExpiresOn   int64  `json:"expires_on"`
+		ExpiresOn   int64  `json:"expires_on"` // unix seconds; falls back below if absent
 	}
 	if err := json.Unmarshal(out, &raw); err != nil || raw.AccessToken == "" {
 		return token{}, false
