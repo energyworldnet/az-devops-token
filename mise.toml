@@ -1,0 +1,10 @@
+[tools]
+go = "1.23"
+
+[tasks.build]
+description = "Build for the host platform into dist/"
+run = "go build -trimpath -ldflags '-s -w' -o dist/az-devops-token ."
+
+[tasks.check]
+description = "Vet and gofmt-check"
+run = ["go vet ./...", "test -z \"$(gofmt -l .)\""]
