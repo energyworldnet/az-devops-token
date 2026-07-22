@@ -30,9 +30,9 @@ jobs:
           ver="${{ github.event.inputs.version || github.event.release.tag_name || 'latest' }}"
           ver="${ver#v}"
           mise use -g "github:energyworldnet/az-devops-token[exe=az-devops-token]@${ver}"
-          # No `az` on the runner, so the binary prints its own "no token"
+          # No login on the runner, so the binary prints its own "no token"
           # message and exits 0 — which still proves the asset match + exe
           # resolution and that the binary runs on this OS.
           out="$(mise exec -- az-devops-token 2>&1 || true)"
           echo "output: $out"
-          echo "$out" | grep -q "az-devops-token" || { echo "::error::binary did not resolve or run"; exit 1; }
+          echo "$out" | grep -q "no token" || { echo "::error::binary did not resolve or run"; exit 1; }

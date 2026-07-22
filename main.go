@@ -1,40 +1,55 @@
-// Command az-devops-token authenticates the internal Azure DevOps Artifacts
-// feeds via a Microsoft Entra access token.
+// Command az-devops-token prints a Microsoft Entra access token for the internal
+// Azure DevOps Artifacts feeds (usable as an npm _authToken or a NuGet feed
+// password).
 //
-// With no arguments it prints a cached token (usable as an npm _authToken or a
-// NuGet feed password), shelling out to the Azure CLI so the login session and
-// refresh token stay in az's store — it only caches the short-lived access
-// token, to avoid az's startup cost on every mise `[env]` evaluation. In that
-// mode it always exits 0: a missing or unauthenticated az must not hard-error
-// mise's config load, so on failure it prints nothing and consumers get a
+// It authenticates as the signed-in user through a registered Entra public
+// client, requesting only the delegated `vso.packaging` (Packaging read) scope —
+// so the issued token is limited to reading feeds, not the full-privilege
+// `user_impersonation` scope that `az account get-access-token` would return.
+//
+// Sign in once with `az-devops-token login`, which opens the system browser for
+// an interactive sign-in. The refresh token is cached by MSAL; subsequent
+// invocations acquire an access token silently. The default (no-argument)
+// invocation always exits 0: a missing or expired login must not hard-error
+// mise's config load, so on failure it prints nothing and consumers degrade to a
 // clean 401.
-//
-// The `login` subcommand ensures an az session (interactive if needed) and is
-// meant for a one-time setup step — where `[env]` can't run, since it must stay
-// silent and non-interactive on every shimmed command.
 package main
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
-	"strings"
 	"time"
+
+	"github.com/AzureAD/microsoft-authentication-library-for-go/apps/cache"
+	"github.com/AzureAD/microsoft-authentication-library-for-go/apps/public"
 )
 
 // adoResource is the public, global Azure DevOps resource ID (identical for
-// every tenant — not a secret).
+// every tenant — not a secret). The requested scope narrows the token to feed
+// reads.
 const adoResource = "499b84ac-1321-427f-aa17-267ca6975798"
 
-// refreshSkew renews slightly early so a token never expires mid-command.
-const refreshSkew = 5 * time.Minute
+// clientID and tenantID identify the Entra public-client app registration. They
+// are injected at release time via `-ldflags -X`, falling back to the
+// AZURE_CLIENT_ID / AZURE_TENANT_ID environment variables for local builds.
+// Neither is a secret: a public client has no client secret, and a token still
+// requires the user to complete an interactive sign-in against the tenant.
+var (
+	clientID string
+	tenantID string
+)
 
-type token struct {
-	AccessToken string `json:"accessToken"`
-	Expiry      int64  `json:"expiry"` // unix seconds
+func scopes() []string { return []string{adoResource + "/vso.packaging"} }
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func cachePath() string {
@@ -52,117 +67,107 @@ func cachePath() string {
 	return filepath.Join(dir, "az-devops-token.json")
 }
 
-func fromCache(path string) (string, bool) {
-	data, err := os.ReadFile(path)
+// fileCache persists MSAL's token cache (which holds the refresh token and any
+// live access token) to disk so a single `login` survives across invocations.
+type fileCache struct{ path string }
+
+func (c *fileCache) Replace(_ context.Context, u cache.Unmarshaler, _ cache.ReplaceHints) error {
+	data, err := os.ReadFile(c.path)
 	if err != nil {
-		return "", false
+		// A missing cache is the normal pre-login state, not an error.
+		return nil
 	}
-	var t token
-	if err := json.Unmarshal(data, &t); err != nil || t.AccessToken == "" {
-		return "", false
-	}
-	if time.Now().Add(refreshSkew).Unix() >= t.Expiry {
-		return "", false
-	}
-	return t.AccessToken, true
+	return u.Unmarshal(data)
 }
 
-// azCmd builds an `az <args...>` invocation. On Windows the mise pipx install of
-// azure-cli ships an `az.bat` wrapper that can't find its venv Python under uv's
-// layout, so call that Python's azure.cli module directly (bypassing the broken
-// wrapper). Everywhere else, `az` works as-is.
-func azCmd(args ...string) *exec.Cmd {
-	if runtime.GOOS == "windows" {
-		if py := azureCliPython(); py != "" {
-			return exec.Command(py, append([]string{"-m", "azure.cli"}, args...)...)
-		}
-	}
-	return exec.Command("az", args...)
-}
-
-// azureCliPython locates azure-cli's venv Python via mise. `--no-env` skips
-// re-evaluating `[env]`, which would recurse back into this binary.
-func azureCliPython() string {
-	out, err := exec.Command("mise", "--no-env", "where", "pipx:azure-cli").Output()
+// Export writes atomically (temp + rename, 0600) so concurrent shim invocations
+// never read a half-written cache.
+func (c *fileCache) Export(_ context.Context, m cache.Marshaler, _ cache.ExportHints) error {
+	data, err := m.Marshal()
 	if err != nil {
-		return ""
+		return err
 	}
-	py := filepath.Join(strings.TrimSpace(string(out)), "azure-cli", "Scripts", "python.exe")
-	if _, err := os.Stat(py); err != nil {
-		return ""
+	if err := os.MkdirAll(filepath.Dir(c.path), 0o700); err != nil {
+		return err
 	}
-	return py
-}
-
-func fromAz() (token, bool) {
-	out, err := azCmd("account", "get-access-token", "--resource", adoResource, "--output", "json").Output()
-	if err != nil {
-		return token{}, false
-	}
-	var raw struct {
-		AccessToken string `json:"accessToken"`
-		ExpiresOn   int64  `json:"expires_on"` // unix seconds; falls back below if absent
-	}
-	if err := json.Unmarshal(out, &raw); err != nil || raw.AccessToken == "" {
-		return token{}, false
-	}
-	expiry := raw.ExpiresOn
-	if expiry == 0 {
-		expiry = time.Now().Add(45 * time.Minute).Unix()
-	}
-	return token{AccessToken: raw.AccessToken, Expiry: expiry}, true
-}
-
-// store writes atomically (temp + rename) so concurrent shim invocations never
-// read a half-written token.
-func store(path string, t token) {
-	data, err := json.Marshal(t)
-	if err != nil {
-		return
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return
-	}
-	tmp := fmt.Sprintf("%s.%d.tmp", path, os.Getpid())
+	tmp := fmt.Sprintf("%s.%d.tmp", c.path, os.Getpid())
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return
+		return err
 	}
-	_ = os.Rename(tmp, path)
+	return os.Rename(tmp, c.path)
 }
 
-// login ensures an az session that can mint feed tokens, prompting
-// interactively only when one isn't already present. Intended for a one-time
-// setup step. The "signed in?" check tests token acquisition directly, which
-// is more precise than `az account show` for accounts without a subscription.
-func login() int {
-	if azCmd("account", "get-access-token", "--resource", adoResource).Run() == nil {
-		return 0 // already able to get a token
+func newApp() (public.Client, error) {
+	cid := firstNonEmpty(clientID, os.Getenv("AZURE_CLIENT_ID"))
+	tid := firstNonEmpty(tenantID, os.Getenv("AZURE_TENANT_ID"))
+	if cid == "" || tid == "" {
+		return public.Client{}, fmt.Errorf("client/tenant ID not configured (set AZURE_CLIENT_ID and AZURE_TENANT_ID)")
 	}
-	// --allow-no-subscriptions: EWN accounts commonly have Azure DevOps access
-	// without an Azure subscription, which a plain `az login` rejects.
-	c := azCmd("login", "--allow-no-subscriptions")
-	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
-	if err := c.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "az-devops-token: login failed: %v\n", err)
-		return 1
+	return public.New(cid,
+		public.WithAuthority("https://login.microsoftonline.com/"+tid),
+		public.WithCache(&fileCache{path: cachePath()}),
+	)
+}
+
+// silentToken returns a cached or silently-refreshed access token, if the user
+// has a prior login that is still valid or refreshable.
+func silentToken(ctx context.Context, app public.Client) (string, bool) {
+	accounts, err := app.Accounts(ctx)
+	if err != nil || len(accounts) == 0 {
+		return "", false
 	}
-	return 0
+	res, err := app.AcquireTokenSilent(ctx, scopes(), public.WithSilentAccount(accounts[0]))
+	if err != nil {
+		return "", false
+	}
+	return res.AccessToken, true
+}
+
+// interactiveLogin opens the system browser for sign-in. Unlike the device-code
+// flow, a browser sign-in carries the machine's Entra device identity via SSO, so
+// it satisfies Conditional Access policies that require a registered/compliant
+// device.
+func interactiveLogin(ctx context.Context, app public.Client) error {
+	_, err := app.AcquireTokenInteractive(ctx, scopes())
+	return err
 }
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "login" {
-		os.Exit(login())
+	login := len(os.Args) > 1 && os.Args[1] == "login"
+
+	app, err := newApp()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		if login {
+			os.Exit(1)
+		}
+		return
 	}
 
-	path := cachePath()
-	if tok, ok := fromCache(path); ok {
+	// A cached/refreshable token satisfies both paths: it's what `print` emits,
+	// and it makes `login` idempotent (no prompt when already signed in).
+	silentCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	tok, ok := silentToken(silentCtx, app)
+	cancel()
+	if ok {
+		if login {
+			fmt.Fprintln(os.Stderr, "already signed in")
+			return
+		}
 		fmt.Print(tok)
 		return
 	}
-	if t, ok := fromAz(); ok {
-		store(path, t)
-		fmt.Print(t.AccessToken)
+
+	if !login {
+		// No usable token — degrade to empty output so mise's config load and the
+		// consuming package manager fall through to a clean 401 rather than erroring.
+		fmt.Fprintln(os.Stderr, "no token — run `az-devops-token login`")
 		return
 	}
-	fmt.Fprintln(os.Stderr, "az-devops-token: no token — run `az-devops-token login`")
+
+	if err := interactiveLogin(context.Background(), app); err != nil {
+		fmt.Fprintf(os.Stderr, "login failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Fprintln(os.Stderr, "signed in")
 }

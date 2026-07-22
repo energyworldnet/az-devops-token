@@ -16,12 +16,18 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Cross-compile
+        # Bake the Entra public-client app IDs into the binary from repo variables.
+        env:
+          LDFLAGS: >-
+            -s -w
+            -X main.clientID=${{ vars.AZURE_CLIENT_ID }}
+            -X main.tenantID=${{ vars.AZURE_TENANT_ID }}
         run: |
           mkdir -p dist
           for t in windows/amd64 windows/arm64 linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
             os=${t%/*}; arch=${t#*/}; out="dist/az-devops-token-$os-$arch"
             [ "$os" = windows ] && out="$out.exe"
-            GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w" -o "$out" .
+            GOOS=$os GOARCH=$arch go build -trimpath -ldflags "$LDFLAGS" -o "$out" .
           done
       - name: Release
         env:
