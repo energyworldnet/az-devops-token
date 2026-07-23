@@ -13,6 +13,9 @@
 // invocation always exits 0: a missing or expired login must not hard-error
 // mise's config load, so on failure it prints nothing and consumers degrade to a
 // clean 401.
+//
+// Token acquisition, the minimum-lifetime guarantee, and the on-disk cache live
+// in internal/token; this file is the CLI wiring.
 package main
 
 import (
@@ -22,14 +25,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/AzureAD/microsoft-authentication-library-for-go/apps/cache"
 	"github.com/AzureAD/microsoft-authentication-library-for-go/apps/public"
+	"github.com/energyworldnet/az-devops-token/internal/token"
 )
-
-// adoResource is the public, global Azure DevOps resource ID (identical for
-// every tenant — not a secret). The requested scope narrows the token to feed
-// reads.
-const adoResource = "499b84ac-1321-427f-aa17-267ca6975798"
 
 // clientID and tenantID identify the Entra public-client app registration. They
 // are injected at release time via `-ldflags -X`, falling back to the
@@ -40,8 +38,6 @@ var (
 	clientID string
 	tenantID string
 )
-
-func scopes() []string { return []string{adoResource + "/vso.packaging"} }
 
 func firstNonEmpty(vals ...string) string {
 	for _, v := range vals {
@@ -67,37 +63,7 @@ func cachePath() string {
 	return filepath.Join(dir, "az-devops-token.json")
 }
 
-// fileCache persists MSAL's token cache (which holds the refresh token and any
-// live access token) to disk so a single `login` survives across invocations.
-type fileCache struct{ path string }
-
-func (c *fileCache) Replace(_ context.Context, u cache.Unmarshaler, _ cache.ReplaceHints) error {
-	data, err := os.ReadFile(c.path)
-	if err != nil {
-		// A missing cache is the normal pre-login state, not an error.
-		return nil
-	}
-	return u.Unmarshal(data)
-}
-
-// Export writes atomically (temp + rename, 0600) so concurrent shim invocations
-// never read a half-written cache.
-func (c *fileCache) Export(_ context.Context, m cache.Marshaler, _ cache.ExportHints) error {
-	data, err := m.Marshal()
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(c.path), 0o700); err != nil {
-		return err
-	}
-	tmp := fmt.Sprintf("%s.%d.tmp", c.path, os.Getpid())
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, c.path)
-}
-
-func newApp() (public.Client, error) {
+func newApp(fc *token.FileCache) (public.Client, error) {
 	cid := firstNonEmpty(clientID, os.Getenv("AZURE_CLIENT_ID"))
 	tid := firstNonEmpty(tenantID, os.Getenv("AZURE_TENANT_ID"))
 	if cid == "" || tid == "" {
@@ -105,22 +71,8 @@ func newApp() (public.Client, error) {
 	}
 	return public.New(cid,
 		public.WithAuthority("https://login.microsoftonline.com/"+tid),
-		public.WithCache(&fileCache{path: cachePath()}),
+		public.WithCache(fc),
 	)
-}
-
-// silentToken returns a cached or silently-refreshed access token, if the user
-// has a prior login that is still valid or refreshable.
-func silentToken(ctx context.Context, app public.Client) (string, bool) {
-	accounts, err := app.Accounts(ctx)
-	if err != nil || len(accounts) == 0 {
-		return "", false
-	}
-	res, err := app.AcquireTokenSilent(ctx, scopes(), public.WithSilentAccount(accounts[0]))
-	if err != nil {
-		return "", false
-	}
-	return res.AccessToken, true
 }
 
 // interactiveLogin opens the system browser for sign-in. Unlike the device-code
@@ -128,14 +80,15 @@ func silentToken(ctx context.Context, app public.Client) (string, bool) {
 // it satisfies Conditional Access policies that require a registered/compliant
 // device.
 func interactiveLogin(ctx context.Context, app public.Client) error {
-	_, err := app.AcquireTokenInteractive(ctx, scopes())
+	_, err := app.AcquireTokenInteractive(ctx, token.Scopes())
 	return err
 }
 
 func main() {
 	login := len(os.Args) > 1 && os.Args[1] == "login"
 
-	app, err := newApp()
+	fc := &token.FileCache{Path: cachePath()}
+	app, err := newApp(fc)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		if login {
@@ -147,7 +100,7 @@ func main() {
 	// A cached/refreshable token satisfies both paths: it's what `print` emits,
 	// and it makes `login` idempotent (no prompt when already signed in).
 	silentCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	tok, ok := silentToken(silentCtx, app)
+	tok, ok := token.Silent(silentCtx, app, fc)
 	cancel()
 	if ok {
 		if login {
