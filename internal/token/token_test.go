@@ -111,7 +111,7 @@ func TestWithLockCrossProcess(t *testing.T) {
 	// Re-exec this test binary as a separate process that holds the lock, to
 	// exercise the genuinely cross-process advisory lock rather than same-process
 	// scheduling.
-	cmd := exec.Command(os.Args[0], "-test.run=^TestWithLockCrossProcess$")
+	cmd := exec.Command(os.Args[0], "-test.run=^TestWithLockCrossProcess$") //nolint:gosec // re-execs this test binary itself, not external input
 	cmd.Env = append(os.Environ(), lockHolderEnv+"="+lockPath)
 	cmd.Stderr = os.Stderr
 	stdin, err := cmd.StdinPipe()
@@ -133,9 +133,32 @@ func TestWithLockCrossProcess(t *testing.T) {
 		_ = cmd.Wait()
 	})
 
-	// Wait until the child reports the lock is held.
-	scanner := bufio.NewScanner(stdout)
-	for scanner.Scan() && scanner.Text() != lockHeldSignal {
+	// Wait until the child reports the lock is held, bounding the wait so a
+	// stalled child (never signals) or one that exits before signalling (EOF)
+	// fails fast with a clear diagnostic instead of hanging or falling through
+	// to a misleading contended-lock assertion.
+	ready := make(chan error, 1)
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			if scanner.Text() == lockHeldSignal {
+				ready <- nil
+				return
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			ready <- fmt.Errorf("reading lock holder output: %w", err)
+			return
+		}
+		ready <- fmt.Errorf("lock holder exited before signalling it held the lock")
+	}()
+	select {
+	case err := <-ready:
+		if err != nil {
+			t.Fatalf("waiting for lock holder: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for lock holder to acquire the lock")
 	}
 
 	// The lock is held by another process: acquisition must give up within the

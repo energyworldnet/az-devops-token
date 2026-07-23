@@ -120,9 +120,7 @@ func WithLock(ctx context.Context, lockPath string, fn func()) (bool, error) {
 	if !locked {
 		return false, nil
 	}
-	/* The lock is advisory and process-scoped; an Unlock failure is not
-	   actionable and the OS releases the lock on exit regardless. */
-	defer fl.Unlock() //nolint:errcheck
+	defer fl.Unlock() //nolint:errcheck // advisory lock; unlock errors aren't actionable and the OS releases it on exit
 	fn()
 	return true, nil
 }
