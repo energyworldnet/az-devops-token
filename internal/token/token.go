@@ -120,7 +120,11 @@ func WithLock(ctx context.Context, lockPath string, fn func()) (bool, error) {
 	if !locked {
 		return false, nil
 	}
-	defer fl.Unlock() //nolint:errcheck // advisory lock; unlock errors aren't actionable and the OS releases it on exit
+	/* Release is best-effort: an Unlock failure is not actionable here — this is
+	   a short-lived CLI about to exit, and the OS releases the advisory lock and
+	   closes the descriptor on exit regardless. Folding it into the return would
+	   also make a rare release hiccup discard an already-acquired token. */
+	defer func() { _ = fl.Unlock() }()
 	fn()
 	return true, nil
 }

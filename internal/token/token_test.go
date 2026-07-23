@@ -110,8 +110,9 @@ func TestWithLockCrossProcess(t *testing.T) {
 
 	// Re-exec this test binary as a separate process that holds the lock, to
 	// exercise the genuinely cross-process advisory lock rather than same-process
-	// scheduling.
-	cmd := exec.Command(os.Args[0], "-test.run=^TestWithLockCrossProcess$") //nolint:gosec // re-execs this test binary itself, not external input
+	// scheduling. The context stops the helper if the test exits early.
+	holderCtx, cancelHolder := context.WithCancel(context.Background())
+	cmd := exec.CommandContext(holderCtx, os.Args[0], "-test.run=^TestWithLockCrossProcess$") //nolint:gosec // re-execs this test binary itself, not external input
 	cmd.Env = append(os.Environ(), lockHolderEnv+"="+lockPath)
 	cmd.Stderr = os.Stderr
 	stdin, err := cmd.StdinPipe()
@@ -128,8 +129,7 @@ func TestWithLockCrossProcess(t *testing.T) {
 	// Safety net: if an assertion below fails early, don't leave the child
 	// blocked (and the lockfile undeletable).
 	t.Cleanup(func() {
-		_ = stdin.Close()
-		_ = cmd.Process.Kill()
+		cancelHolder()
 		_ = cmd.Wait()
 	})
 
