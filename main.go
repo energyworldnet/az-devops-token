@@ -141,13 +141,13 @@ func main() {
 		return
 	}
 	if !locked {
-		// A peer held the lock past our budget. On `print`, stay silent so mise's
-		// config load falls through to a clean 401; on `login`, surface it.
+		// A peer held the lock past our budget. On `print`, stay silent (empty
+		// output, exit 0) so mise's config load falls through to a clean 401; on
+		// `login`, surface it.
 		if login {
 			fmt.Fprintln(os.Stderr, "timed out waiting for another sign-in to finish")
 			os.Exit(1)
 		}
-		fmt.Fprintln(os.Stderr, "another az-devops-token invocation is busy — no token emitted")
 		return
 	}
 

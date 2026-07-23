@@ -1,8 +1,13 @@
 package token_test
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -81,26 +86,60 @@ func TestWithLockCreatesParentDir(t *testing.T) {
 	}
 }
 
-func TestWithLockContendedGivesUp(t *testing.T) {
+// lockHolderEnv names the env var that switches TestWithLockCrossProcess into
+// its child (lock-holder) role. The child holds the lock on the named path
+// until the parent closes its stdin.
+const lockHolderEnv = "AZ_DEVOPS_TOKEN_TEST_LOCK_PATH"
+
+// lockHeldSignal is written to stdout by the child once the lock is held, so
+// the parent only starts contending after acquisition.
+const lockHeldSignal = "LOCK_HELD"
+
+func TestWithLockCrossProcess(t *testing.T) {
+	if lockPath := os.Getenv(lockHolderEnv); lockPath != "" {
+		// Child role: hold the lock until the parent closes our stdin (EOF),
+		// signalling readiness first.
+		_, _ = token.WithLock(context.Background(), lockPath, func() {
+			fmt.Println(lockHeldSignal)
+			_, _ = io.Copy(io.Discard, os.Stdin)
+		})
+		return
+	}
+
 	lockPath := filepath.Join(t.TempDir(), "cache.lock")
 
-	held := make(chan struct{})
-	release := make(chan struct{})
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_, err := token.WithLock(context.Background(), lockPath, func() {
-			close(held)
-			<-release
-		})
-		if err != nil {
-			t.Errorf("holder WithLock: %v", err)
-		}
-	}()
-	<-held // the lock is now held by the goroutine
+	// Re-exec this test binary as a separate process that holds the lock, to
+	// exercise the genuinely cross-process advisory lock rather than same-process
+	// scheduling.
+	cmd := exec.Command(os.Args[0], "-test.run=^TestWithLockCrossProcess$")
+	cmd.Env = append(os.Environ(), lockHolderEnv+"="+lockPath)
+	cmd.Stderr = os.Stderr
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatalf("StdinPipe: %v", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("StdoutPipe: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start lock holder: %v", err)
+	}
+	// Safety net: if an assertion below fails early, don't leave the child
+	// blocked (and the lockfile undeletable).
+	t.Cleanup(func() {
+		_ = stdin.Close()
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
 
-	// A second acquisition under an expired context must give up without running
-	// fn, so a latency-sensitive caller can degrade rather than block.
+	// Wait until the child reports the lock is held.
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() && scanner.Text() != lockHeldSignal {
+	}
+
+	// The lock is held by another process: acquisition must give up within the
+	// deadline without running fn, so a latency-sensitive caller can degrade.
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	ran := false
@@ -115,8 +154,22 @@ func TestWithLockContendedGivesUp(t *testing.T) {
 		t.Error("fn must not run when the lock is not acquired")
 	}
 
-	close(release)
-	<-done
+	// Release the holder and wait for it to exit, so the lock is fully released.
+	if err := stdin.Close(); err != nil {
+		t.Fatalf("close holder stdin: %v", err)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("lock holder exited with error: %v", err)
+	}
+
+	// The lock is acquirable again now that the holder is gone.
+	locked, err = token.WithLock(context.Background(), lockPath, func() {})
+	if err != nil {
+		t.Fatalf("post-release WithLock: %v", err)
+	}
+	if !locked {
+		t.Error("lock should be acquirable after the holder exits")
+	}
 }
 
 func TestNeedsForcedRefresh(t *testing.T) {
