@@ -18,6 +18,7 @@ import (
 
 	"github.com/AzureAD/microsoft-authentication-library-for-go/apps/cache"
 	"github.com/AzureAD/microsoft-authentication-library-for-go/apps/public"
+	"github.com/gofrs/flock"
 )
 
 // adoResource is the public, global Azure DevOps resource ID (identical for
@@ -31,6 +32,11 @@ const adoResource = "499b84ac-1321-427f-aa17-267ca6975798"
 // for any TTL strictly below this bound and never serve an expired token. Entra
 // feed tokens live ~1h, so this leaves ample refresh headroom.
 const MinLifetime = 20 * time.Minute
+
+// lockRetryDelay is how long WithLock sleeps between attempts to acquire a
+// contended cross-process lock. Operations under the lock are sub-second, so a
+// short poll keeps a waiter's latency low without busy-spinning.
+const lockRetryDelay = 50 * time.Millisecond
 
 // Scopes returns the delegated scopes requested for a feed token.
 func Scopes() []string { return []string{adoResource + "/vso.packaging"} }
@@ -79,6 +85,46 @@ func (c *FileCache) Export(_ context.Context, m cache.Marshaler, _ cache.ExportH
 		return err
 	}
 	return os.Rename(tmp, c.Path)
+}
+
+// WithLock runs fn while holding an exclusive cross-process advisory lock on
+// lockPath, then releases it. It serializes the whole reload → refresh →
+// export sequence across concurrent invocations so a later writer's Export
+// cannot clobber a newer refresh-token/cache update a peer just wrote. The
+// lock is an OS advisory lock, so it is released automatically if the process
+// dies mid-operation — a crash leaves no stale lock.
+//
+// It blocks (polling every lockRetryDelay) until the lock is acquired or ctx is
+// done. When ctx expires first it returns (false, nil) without running fn, so a
+// caller on a latency-sensitive path can degrade rather than hang. A genuine
+// lock error (e.g. the lock directory cannot be created) is returned as-is.
+func WithLock(ctx context.Context, lockPath string, fn func()) (bool, error) {
+	/* The lock is acquired before Export creates the cache directory, so
+	   ensure the parent exists first (mirrors Export). Otherwise the first run
+	   on a machine with a not-yet-created cache dir couldn't create the
+	   lockfile. */
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
+		return false, err
+	}
+	fl := flock.New(lockPath)
+	locked, err := fl.TryLockContext(ctx, lockRetryDelay)
+	if err != nil {
+		/* A context error means we simply ran out of time waiting for a peer to
+		   release — report it as a clean give-up (false, nil) so the caller can
+		   degrade, not as a failure. */
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			return false, nil
+		}
+		return false, err
+	}
+	if !locked {
+		return false, nil
+	}
+	/* The lock is advisory and process-scoped; an Unlock failure is not
+	   actionable and the OS releases the lock on exit regardless. */
+	defer fl.Unlock() //nolint:errcheck
+	fn()
+	return true, nil
 }
 
 // StripAccessTokens removes the access-token entries from a serialized MSAL

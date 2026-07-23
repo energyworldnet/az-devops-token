@@ -97,29 +97,77 @@ func main() {
 		return
 	}
 
-	// A cached/refreshable token satisfies both paths: it's what `print` emits,
-	// and it makes `login` idempotent (no prompt when already signed in).
-	silentCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	tok, ok := token.Silent(silentCtx, app, fc)
-	cancel()
-	if ok {
+	// Serialize the whole acquire across processes so a peer's reload → refresh →
+	// export can't interleave with ours and clobber a newer cache write. The lock
+	// is held from the silent attempt through any interactive sign-in, so two
+	// logins can't both prompt and race their writes; it also dedupes concurrent
+	// refreshes, since a waiter finds the fresh token already cached on release.
+	lockPath := cachePath() + ".lock"
+
+	// Bound the wait for the lock. `print` shares mise's tolerance for a slow
+	// config load; `login` may queue behind an in-progress interactive sign-in,
+	// which is user-paced and can take a while.
+	acquireTimeout := 30 * time.Second
+	if login {
+		acquireTimeout = 2 * time.Minute
+	}
+	lockCtx, cancelLock := context.WithTimeout(context.Background(), acquireTimeout)
+	defer cancelLock()
+
+	var (
+		tok       string
+		haveToken bool
+		loginErr  error
+	)
+	locked, lockErr := token.WithLock(lockCtx, lockPath, func() {
+		// A cached/refreshable token satisfies both paths: it's what `print` emits,
+		// and it makes `login` idempotent (no prompt when already signed in).
+		silentCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		tok, haveToken = token.Silent(silentCtx, app, fc)
+		cancel()
+		if haveToken || !login {
+			return
+		}
+		// No cached token on the login path: sign in interactively, still under the
+		// lock. context.Background() (not lockCtx) bounds this — the browser round
+		// trip must not be cut short by the acquire timeout.
+		loginErr = interactiveLogin(context.Background(), app)
+	})
+	if lockErr != nil {
+		fmt.Fprintf(os.Stderr, "cache lock: %v\n", lockErr)
 		if login {
-			fmt.Fprintln(os.Stderr, "already signed in")
+			os.Exit(1)
+		}
+		return
+	}
+	if !locked {
+		// A peer held the lock past our budget. On `print`, stay silent so mise's
+		// config load falls through to a clean 401; on `login`, surface it.
+		if login {
+			fmt.Fprintln(os.Stderr, "timed out waiting for another sign-in to finish")
+			os.Exit(1)
+		}
+		fmt.Fprintln(os.Stderr, "another az-devops-token invocation is busy — no token emitted")
+		return
+	}
+
+	if !login {
+		if !haveToken {
+			// No usable token — degrade to empty output so mise's config load and the
+			// consuming package manager fall through to a clean 401 rather than erroring.
+			fmt.Fprintln(os.Stderr, "no token — run `az-devops-token login`")
 			return
 		}
 		fmt.Print(tok)
 		return
 	}
 
-	if !login {
-		// No usable token — degrade to empty output so mise's config load and the
-		// consuming package manager fall through to a clean 401 rather than erroring.
-		fmt.Fprintln(os.Stderr, "no token — run `az-devops-token login`")
+	if haveToken {
+		fmt.Fprintln(os.Stderr, "already signed in")
 		return
 	}
-
-	if err := interactiveLogin(context.Background(), app); err != nil {
-		fmt.Fprintf(os.Stderr, "login failed: %v\n", err)
+	if loginErr != nil {
+		fmt.Fprintf(os.Stderr, "login failed: %v\n", loginErr)
 		os.Exit(1)
 	}
 	fmt.Fprintln(os.Stderr, "signed in")
