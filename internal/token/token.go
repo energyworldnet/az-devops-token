@@ -10,6 +10,7 @@ package token
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -48,8 +49,11 @@ type FileCache struct {
 func (c *FileCache) Replace(_ context.Context, u cache.Unmarshaler, _ cache.ReplaceHints) error {
 	data, err := os.ReadFile(c.Path)
 	if err != nil {
-		// A missing cache is the normal pre-login state, not an error.
-		return nil
+		if errors.Is(err, os.ErrNotExist) {
+			// A missing cache is the normal pre-login state, not an error.
+			return nil
+		}
+		return fmt.Errorf("read MSAL cache: %w", err)
 	}
 	if c.DropAccessTokens {
 		data, err = StripAccessTokens(data)
