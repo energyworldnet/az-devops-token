@@ -14,7 +14,7 @@ are short-lived (~1h); the durable refresh token stays in a `0600` cache.
 
 ## Usage
 
-Sign in once per machine (interactive device-code flow):
+Sign in once per machine (interactive browser sign-in):
 
 ```sh
 az-devops-token login
@@ -25,6 +25,11 @@ Then print a token — silent, refreshing as needed:
 ```sh
 az-devops-token
 ```
+
+The printed token has a guaranteed minimum remaining lifetime (currently
+~20 minutes): if the cached token is closer to expiry, the tool forces a
+refresh first. A caller can therefore cache it for any shorter interval (e.g.
+mise's `env_cache_ttl`) without risking an expired credential.
 
 The default (no-argument) invocation always exits `0`. With no valid login it
 prints nothing to stdout and a hint to stderr, so callers (e.g. mise `[env]`)
