@@ -17,7 +17,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Version to test (e.g. 0.2.0, or latest)
+        description: Version to test (0.7.0 or later, or latest)
         default: latest
 
 jobs:
@@ -37,9 +37,11 @@ jobs:
           ver="${{ inputs.version || 'latest' }}"
           ver="${ver#v}"
           mise use -g "github:energyworldnet/az-devops-token@${ver}"
-          # No login on the runner, so the binary prints its own "no token"
-          # message and exits 0 — which still proves the asset match, the
-          # binary's resolution, and that it runs on this OS.
-          out="$(mise exec -- az-devops-token print 2>&1 || true)"
+          # status never writes a token, unlike print, so this log stays safe
+          # even if the runner ever holds a login. With none, it reports
+          # "not signed in" and exits 1, which proves the asset match, that
+          # the binary runs on this OS, and that the release baked in the app
+          # IDs (without them it reports missing configuration instead).
+          out="$(mise exec -- az-devops-token status 2>&1 || true)"
           echo "output: $out"
-          echo "$out" | grep -q "no token" || { echo "::error::binary did not resolve or run"; exit 1; }
+          echo "$out" | grep -q "not signed in" || { echo "::error::binary did not resolve or run"; exit 1; }
