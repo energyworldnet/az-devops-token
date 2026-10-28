@@ -45,3 +45,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes
+  smoke:
+    needs: release
+    uses: ./.github/workflows/smoke.yml
+    with:
+      version: ${{ github.ref_name }}
