@@ -11,13 +11,15 @@ func TestParseCommand(t *testing.T) {
 		want command
 	}{
 		{nil, printCmd{}},
+		{[]string{"print"}, printCmd{}},
+		{[]string{"print", "--help"}, usageErrCmd{reason: `unexpected argument "--help" after print`}},
 		{[]string{"login"}, loginCmd{}},
 		{[]string{"help"}, helpCmd{}},
 		{[]string{"-h"}, helpCmd{}},
 		{[]string{"--help"}, helpCmd{}},
 		{[]string{"-help"}, helpCmd{}},
 		{[]string{"--version"}, usageErrCmd{reason: `unknown argument "--version"`}},
-		{[]string{"print"}, usageErrCmd{reason: `unknown argument "print"`}},
+		{[]string{"get"}, usageErrCmd{reason: `unknown argument "get"`}},
 		{[]string{"login", "--help"}, usageErrCmd{reason: `unexpected argument "--help" after login`}},
 		{[]string{"--help", "login"}, usageErrCmd{reason: `unexpected argument "login" after --help`}},
 	}

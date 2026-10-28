@@ -23,7 +23,7 @@ az-devops-token login
 Then print a token — silent, refreshing as needed:
 
 ```sh
-az-devops-token
+az-devops-token print
 ```
 
 The printed token has a guaranteed minimum remaining lifetime (currently
@@ -31,13 +31,14 @@ The printed token has a guaranteed minimum remaining lifetime (currently
 refresh first. A caller can therefore cache it for any shorter interval (e.g.
 mise's `env_cache_ttl`) without risking an expired credential.
 
-Only the bare invocation prints a token. `--help` (or `-h`, `help`) prints
-usage, and any other argument prints usage to stderr and exits `2`, so probing
-the CLI never writes a credential to stdout.
+Pass `print` explicitly. The bare invocation still prints a token but is
+deprecated, and a future release will make it print usage instead. `--help`
+(or `-h`, `help`) prints usage, and any other argument prints usage to stderr
+and exits `2`, so probing the CLI never writes a credential to stdout.
 
-The default (no-argument) invocation always exits `0`. With no valid login it
-prints nothing to stdout and a hint to stderr, so callers (e.g. mise `[env]`)
-degrade to a clean `401` rather than erroring.
+The `print` invocation always exits `0`. With no valid login it prints nothing
+to stdout and a hint to stderr, so callers (e.g. mise `[env]`) degrade to a
+clean `401` rather than erroring.
 
 ## Configuration
 
