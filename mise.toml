@@ -1,5 +1,5 @@
 [tools]
-go = "1.23"
+go = "1.27"
 
 [tasks.build]
 description = "Build for the host platform into dist/"

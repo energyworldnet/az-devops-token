@@ -1,6 +1,6 @@
 module github.com/energyworldnet/az-devops-token
 
-go 1.23
+go 1.27.0
 
 require github.com/AzureAD/microsoft-authentication-library-for-go v1.7.2
 
