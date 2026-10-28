@@ -31,6 +31,16 @@ jobs:
             [ "$os" = windows ] && out="$out.exe"
             GOOS=$os GOARCH=$arch go build -trimpath -ldflags "$LDFLAGS" -o "$out" .
           done
+      - name: Verify stamped version
+        # -X silently skips a symbol that doesn't exist, so a renamed version
+        # variable would otherwise ship every release reporting "dev".
+        run: |
+          expected="az-devops-token $GITHUB_REF_NAME"
+          actual="$(./dist/az-devops-token-linux-amd64 --version)"
+          if [ "$actual" != "$expected" ]; then
+            printf 'version mismatch: got %s, want %s\n' "$actual" "$expected" >&2
+            exit 1
+          fi
       - name: Release
         env:
           GH_TOKEN: ${{ github.token }}
