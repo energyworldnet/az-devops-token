@@ -150,7 +150,9 @@ func TestRun(t *testing.T) {
 		{[]string{"status"}, 5, "STATUS", ""},
 		{[]string{"logout"}, 6, "LOGOUT", ""},
 		{[]string{"--help"}, 0, usage, ""},
-		{[]string{"--version"}, 2, "", "az-devops-token: unknown argument \"--version\"\n\n" + usage},
+		{[]string{"version"}, 0, "az-devops-token dev\n", ""},
+		{[]string{"--version"}, 0, "az-devops-token dev\n", ""},
+		{[]string{"--verbose"}, 2, "", "az-devops-token: unknown argument \"--verbose\"\n\n" + usage},
 		{[]string{"print", "extra"}, 2, "", "az-devops-token: unexpected argument \"extra\" after print\n\n" + usage},
 	}
 	for _, c := range cases {
@@ -180,7 +182,10 @@ func TestParseCommand(t *testing.T) {
 		{[]string{"-h"}, helpCmd{}},
 		{[]string{"--help"}, helpCmd{}},
 		{[]string{"-help"}, helpCmd{}},
-		{[]string{"--version"}, usageErrCmd{reason: `unknown argument "--version"`}},
+		{[]string{"version"}, versionCmd{}},
+		{[]string{"--version"}, versionCmd{}},
+		{[]string{"version", "extra"}, usageErrCmd{reason: `unexpected argument "extra" after version`}},
+		{[]string{"--verbose"}, usageErrCmd{reason: `unknown argument "--verbose"`}},
 		{[]string{"get"}, usageErrCmd{reason: `unknown argument "get"`}},
 		{[]string{"login", "--help"}, usageErrCmd{reason: `unexpected argument "--help" after login`}},
 		{[]string{"--help", "login"}, usageErrCmd{reason: `unexpected argument "login" after --help`}},

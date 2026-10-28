@@ -16,12 +16,14 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Cross-compile
-        # Bake the Entra public-client app IDs into the binary from repo variables.
+        # Bake the Entra public-client app IDs (from repo variables) and the
+        # release tag into the binary.
         env:
           LDFLAGS: >-
             -s -w
             -X main.clientID=${{ vars.AZURE_CLIENT_ID }}
             -X main.tenantID=${{ vars.AZURE_TENANT_ID }}
+            -X main.version=${{ github.ref_name }}
         run: |
           mkdir -p dist
           for t in windows/amd64 windows/arm64 linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
@@ -29,6 +31,16 @@ jobs:
             [ "$os" = windows ] && out="$out.exe"
             GOOS=$os GOARCH=$arch go build -trimpath -ldflags "$LDFLAGS" -o "$out" .
           done
+      - name: Verify stamped version
+        # -X silently skips a symbol that doesn't exist, so a renamed version
+        # variable would otherwise ship every release reporting "dev".
+        run: |
+          expected="az-devops-token $GITHUB_REF_NAME"
+          actual="$(./dist/az-devops-token-linux-amd64 --version)"
+          if [ "$actual" != "$expected" ]; then
+            printf 'version mismatch: got %s, want %s\n' "$actual" "$expected" >&2
+            exit 1
+          fi
       - name: Release
         env:
           GH_TOKEN: ${{ github.token }}

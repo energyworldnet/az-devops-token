@@ -42,6 +42,10 @@ var (
 	tenantID string
 )
 
+// version is the release tag, injected alongside the app IDs; local builds
+// report "dev".
+var version = "dev"
+
 func firstNonEmpty(vals ...string) string {
 	for _, v := range vals {
 		if v != "" {
@@ -87,6 +91,7 @@ type (
 	loginCmd    struct{}
 	statusCmd   struct{}
 	logoutCmd   struct{}
+	versionCmd  struct{}
 	helpCmd     struct{}
 	usageErrCmd struct{ reason string }
 )
@@ -95,6 +100,7 @@ func (printCmd) isCommand()    {}
 func (loginCmd) isCommand()    {}
 func (statusCmd) isCommand()   {}
 func (logoutCmd) isCommand()   {}
+func (versionCmd) isCommand()  {}
 func (helpCmd) isCommand()     {}
 func (usageErrCmd) isCommand() {}
 
@@ -117,6 +123,8 @@ func parseCommand(args []string) command {
 		cmd = statusCmd{}
 	case "logout":
 		cmd = logoutCmd{}
+	case "version", "--version":
+		cmd = versionCmd{}
 	case "help", "-h", "-help", "--help":
 		cmd = helpCmd{}
 	default:
@@ -133,6 +141,7 @@ const usage = `Usage:
   az-devops-token login    sign in interactively (once per machine)
   az-devops-token status   show the signed-in account and token expiry
   az-devops-token logout   delete the cached sign-in
+  az-devops-token version  show the release this binary was built from
   az-devops-token --help   show this help
 `
 
@@ -280,6 +289,9 @@ func run(args []string, stdout, stderr io.Writer, act actions) int {
 	switch cmd := parseCommand(args).(type) {
 	case helpCmd:
 		fmt.Fprint(stdout, usage)
+		return 0
+	case versionCmd:
+		fmt.Fprintf(stdout, "az-devops-token %s\n", version)
 		return 0
 	case usageErrCmd:
 		fmt.Fprintf(stderr, "az-devops-token: %s\n\n%s", cmd.reason, usage)
