@@ -246,18 +246,26 @@ func msalActions() actions {
 	}
 }
 
-// printToken writes the access token to stdout. It always exits 0; see the
-// package comment.
+// printToken writes the access token to stdout. It always exits 0; see
+// printReport.
 func printToken(stdout, stderr io.Writer) int {
-	app, fc, err := newSession()
-	if err != nil {
-		fmt.Fprintf(stderr, "%v\n", err)
-		return 0
-	}
-	out, errOut, code := printReport(acquireSilently(app, fc))
+	out, errOut, code := printReport(acquire())
 	fmt.Fprint(stdout, out)
 	fmt.Fprint(stderr, errOut)
 	return code
+}
+
+/*
+acquire builds the session and acquires silently, reporting missing
+configuration as an acquisition error. Only `print` uses it: `status` and
+`login` report missing configuration on its own, since signing in cannot fix it.
+*/
+func acquire() (public.AuthResult, error) {
+	app, fc, err := newSession()
+	if err != nil {
+		return public.AuthResult{}, err
+	}
+	return acquireSilently(app, fc)
 }
 
 // login opens the browser for sign-in unless a silent acquisition already
