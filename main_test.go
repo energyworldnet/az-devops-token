@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/AzureAD/microsoft-authentication-library-for-go/apps/public"
+	"github.com/energyworldnet/az-devops-token/internal/token"
 )
 
 // fakeActions stands in for MSAL: printToken emits a sentinel token, so a
@@ -43,7 +44,6 @@ func TestStatusReport(t *testing.T) {
 	cases := []struct {
 		name       string
 		res        public.AuthResult
-		ok         bool
 		err        error
 		wantStdout string
 		wantStderr string
@@ -52,7 +52,6 @@ func TestStatusReport(t *testing.T) {
 		{
 			name: "signed in",
 			res:  signedIn,
-			ok:   true,
 			wantStdout: "signed in as alice@example.com\n" +
 				"token expires 2026-10-28T17:30:00Z (in 30m)\n" +
 				"cache /c.json\n",
@@ -60,18 +59,21 @@ func TestStatusReport(t *testing.T) {
 		},
 		{
 			name:       "not signed in",
+			err:        token.ErrNotSignedIn,
 			wantStderr: "not signed in — run `az-devops-token login`\ncache /c.json\n",
 			wantCode:   1,
 		},
 		{
-			name:       "misconfigured",
-			err:        errors.New("client/tenant ID not configured"),
-			wantStderr: "client/tenant ID not configured\n",
-			wantCode:   1,
+			name: "acquisition failed",
+			err:  errors.New("network unreachable"),
+			wantStderr: "token acquisition failed: network unreachable\n" +
+				"if your sign-in expired, run `az-devops-token login`\n" +
+				"cache /c.json\n",
+			wantCode: 1,
 		},
 	}
 	for _, c := range cases {
-		stdout, stderr, code := statusReport(c.res, c.ok, c.err, now, "/c.json")
+		stdout, stderr, code := statusReport(c.res, c.err, now, "/c.json")
 		if stdout != c.wantStdout || stderr != c.wantStderr || code != c.wantCode {
 			t.Errorf("%s: statusReport = %q, %q, %d; want %q, %q, %d",
 				c.name, stdout, stderr, code, c.wantStdout, c.wantStderr, c.wantCode)

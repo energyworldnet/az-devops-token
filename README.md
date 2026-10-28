@@ -47,7 +47,9 @@ az-devops-token status
 
 `status` acquires a token the same way `print` does, then reports the account,
 the token's expiry and the cache path instead of the token. It exits `0` when
-a token is available and `1` when you need to `login`.
+a token is available and `1` otherwise, saying whether no one is signed in or
+the acquisition itself failed (a network error, or an expired sign-in that
+needs another `login`).
 
 ## Configuration
 

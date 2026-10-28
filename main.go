@@ -19,6 +19,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -138,20 +139,22 @@ func interactiveLogin(ctx context.Context, app public.Client) error {
 	return err
 }
 
-// silentSession builds the MSAL client and tries to acquire a token without
-// user interaction. A cached/refreshable token satisfies both commands: it's
-// what `print` emits, and it makes `login` idempotent (no prompt when already
-// signed in).
-func silentSession() (app public.Client, res public.AuthResult, ok bool, err error) {
+// newSession builds the MSAL client over the on-disk cache. Its only failure is
+// missing configuration, which no login can fix.
+func newSession() (public.Client, *token.FileCache, error) {
 	fc := &token.FileCache{Path: cachePath()}
-	app, err = newApp(fc)
-	if err != nil {
-		return public.Client{}, public.AuthResult{}, false, err
-	}
+	app, err := newApp(fc)
+	return app, fc, err
+}
+
+// acquireSilently tries to get a token without user interaction. A
+// cached/refreshable token satisfies every command: it's what `print` emits and
+// `status` describes, and it makes `login` idempotent (no prompt when already
+// signed in).
+func acquireSilently(app public.Client, fc *token.FileCache) (public.AuthResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	res, ok = token.Silent(ctx, app, fc)
-	return app, res, ok, nil
+	return token.Silent(ctx, app, fc)
 }
 
 // actions are the commands that need MSAL and the network, passed to run as
@@ -167,12 +170,13 @@ statusReport renders the outcome of a silent acquisition for `status`. It
 receives the whole AuthResult but writes only what formatStatus derives from
 it, so the access token reaches neither stream.
 */
-func statusReport(res public.AuthResult, ok bool, err error, now time.Time, cache string) (stdout, stderr string, code int) {
+func statusReport(res public.AuthResult, err error, now time.Time, cache string) (stdout, stderr string, code int) {
 	switch {
-	case err != nil:
-		return "", fmt.Sprintf("%v\n", err), 1
-	case !ok:
+	case errors.Is(err, token.ErrNotSignedIn):
 		return "", fmt.Sprintf("not signed in — run `az-devops-token login`\ncache %s\n", cache), 1
+	case err != nil:
+		return "", fmt.Sprintf("token acquisition failed: %v\n"+
+			"if your sign-in expired, run `az-devops-token login`\ncache %s\n", err, cache), 1
 	}
 	return formatStatus(res.Account.PreferredUsername, res.ExpiresOn, now, cache), "", 0
 }
@@ -190,26 +194,31 @@ func formatStatus(username string, expiresOn, now time.Time, cache string) strin
 func msalActions() actions {
 	return actions{
 		printToken: func(stdout, stderr io.Writer) int {
-			_, res, ok, err := silentSession()
-			switch {
-			case err != nil:
+			app, fc, err := newSession()
+			if err != nil {
 				fmt.Fprintf(stderr, "%v\n", err)
-			case ok:
+				return 0
+			}
+			res, err := acquireSilently(app, fc)
+			switch {
+			case err == nil:
 				fmt.Fprint(stdout, res.AccessToken)
-			default:
+			case errors.Is(err, token.ErrNotSignedIn):
 				// No usable token — degrade to empty output so mise's config load and the
 				// consuming package manager fall through to a clean 401 rather than erroring.
 				fmt.Fprintln(stderr, "no token — run `az-devops-token login`")
+			default:
+				fmt.Fprintf(stderr, "no token — %v\n", err)
 			}
 			return 0
 		},
 		login: func(stderr io.Writer) int {
-			app, _, ok, err := silentSession()
+			app, fc, err := newSession()
 			if err != nil {
 				fmt.Fprintf(stderr, "%v\n", err)
 				return 1
 			}
-			if ok {
+			if _, err := acquireSilently(app, fc); err == nil {
 				fmt.Fprintln(stderr, "already signed in")
 				return 0
 			}
@@ -221,8 +230,13 @@ func msalActions() actions {
 			return 0
 		},
 		status: func(stdout, stderr io.Writer) int {
-			_, res, ok, err := silentSession()
-			out, errOut, code := statusReport(res, ok, err, time.Now(), cachePath())
+			app, fc, err := newSession()
+			if err != nil {
+				fmt.Fprintf(stderr, "%v\n", err)
+				return 1
+			}
+			res, err := acquireSilently(app, fc)
+			out, errOut, code := statusReport(res, err, time.Now(), fc.Path)
 			fmt.Fprint(stdout, out)
 			fmt.Fprint(stderr, errOut)
 			return code
