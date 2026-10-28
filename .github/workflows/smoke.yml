@@ -33,6 +33,6 @@ jobs:
           # No login on the runner, so the binary prints its own "no token"
           # message and exits 0 — which still proves the asset match + exe
           # resolution and that the binary runs on this OS.
-          out="$(mise exec -- az-devops-token 2>&1 || true)"
+          out="$(mise exec -- az-devops-token print 2>&1 || true)"
           echo "output: $out"
           echo "$out" | grep -q "no token" || { echo "::error::binary did not resolve or run"; exit 1; }

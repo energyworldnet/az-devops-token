@@ -9,10 +9,9 @@
 //
 // Sign in once with `az-devops-token login`, which opens the system browser for
 // an interactive sign-in. The refresh token is cached by MSAL; subsequent
-// invocations acquire an access token silently. `az-devops-token print` (and
-// the deprecated bare invocation) always exits 0: a missing or expired login
-// must not hard-error mise's config load, so on failure it prints nothing and
-// consumers degrade to a clean 401.
+// invocations acquire an access token silently. `az-devops-token print` always
+// exits 0: a missing or expired login must not hard-error mise's config load,
+// so on failure it prints nothing and consumers degrade to a clean 401.
 //
 // Token acquisition, the minimum-lifetime guarantee, and the on-disk cache live
 // in internal/token; this file is the CLI wiring.
@@ -93,14 +92,13 @@ func (helpCmd) isCommand()     {}
 func (usageErrCmd) isCommand() {}
 
 /*
-parseCommand maps arguments to a command. Printing a token requires `print` or
-an empty argument list: anything unrecognized must fail closed, because a
-caller probing with `--help` or `--version` would otherwise get a live token on
-stdout. The bare form remains only until consumers move to `print`.
+parseCommand maps arguments to a command. Printing a token requires `print`:
+anything else, including no arguments, must fail closed, because a caller
+probing the CLI would otherwise get a live token on stdout.
 */
 func parseCommand(args []string) command {
 	if len(args) == 0 {
-		return printCmd{}
+		return usageErrCmd{reason: "missing command"}
 	}
 	var cmd command
 	switch args[0] {

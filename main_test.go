@@ -31,7 +31,7 @@ func TestRun(t *testing.T) {
 		wantStdout string
 		wantStderr string
 	}{
-		{nil, 3, "SECRET", ""},
+		{nil, 2, "", "az-devops-token: missing command\n\n" + usage},
 		{[]string{"print"}, 3, "SECRET", ""},
 		{[]string{"login"}, 4, "", "signed in"},
 		{[]string{"--help"}, 0, usage, ""},
@@ -53,7 +53,7 @@ func TestParseCommand(t *testing.T) {
 		args []string
 		want command
 	}{
-		{nil, printCmd{}},
+		{nil, usageErrCmd{reason: "missing command"}},
 		{[]string{"print"}, printCmd{}},
 		{[]string{"print", "--help"}, usageErrCmd{reason: `unexpected argument "--help" after print`}},
 		{[]string{"login"}, loginCmd{}},
