@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"reflect"
 	"strings"
 	"testing"
@@ -31,6 +32,31 @@ func fakeActions() actions {
 			fmt.Fprint(stdout, "STATUS")
 			return 5
 		},
+		logout: func(stdout, _ io.Writer) int {
+			fmt.Fprint(stdout, "LOGOUT")
+			return 6
+		},
+	}
+}
+
+func TestLogoutReport(t *testing.T) {
+	cases := []struct {
+		name       string
+		removeErr  error
+		wantStdout string
+		wantStderr string
+		wantCode   int
+	}{
+		{"removed", nil, "signed out\ncache /c.json removed\n", "", 0},
+		{"no cache", fmt.Errorf("remove /c.json: %w", fs.ErrNotExist), "already signed out\ncache /c.json\n", "", 0},
+		{"remove failed", errors.New("permission denied"), "", "logout failed: permission denied\ncache /c.json\n", 1},
+	}
+	for _, c := range cases {
+		stdout, stderr, code := logoutReport(c.removeErr, "/c.json")
+		if stdout != c.wantStdout || stderr != c.wantStderr || code != c.wantCode {
+			t.Errorf("%s: logoutReport = %q, %q, %d; want %q, %q, %d",
+				c.name, stdout, stderr, code, c.wantStdout, c.wantStderr, c.wantCode)
+		}
 	}
 }
 
@@ -122,6 +148,7 @@ func TestRun(t *testing.T) {
 		{[]string{"print"}, 3, "SECRET", ""},
 		{[]string{"login"}, 4, "", "signed in"},
 		{[]string{"status"}, 5, "STATUS", ""},
+		{[]string{"logout"}, 6, "LOGOUT", ""},
 		{[]string{"--help"}, 0, usage, ""},
 		{[]string{"--version"}, 2, "", "az-devops-token: unknown argument \"--version\"\n\n" + usage},
 		{[]string{"print", "extra"}, 2, "", "az-devops-token: unexpected argument \"extra\" after print\n\n" + usage},
@@ -146,6 +173,8 @@ func TestParseCommand(t *testing.T) {
 		{[]string{"print", "--help"}, usageErrCmd{reason: `unexpected argument "--help" after print`}},
 		{[]string{"login"}, loginCmd{}},
 		{[]string{"status"}, statusCmd{}},
+		{[]string{"logout"}, logoutCmd{}},
+		{[]string{"logout", "extra"}, usageErrCmd{reason: `unexpected argument "extra" after logout`}},
 		{[]string{"status", "extra"}, usageErrCmd{reason: `unexpected argument "extra" after status`}},
 		{[]string{"help"}, helpCmd{}},
 		{[]string{"-h"}, helpCmd{}},

@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -85,6 +86,7 @@ type (
 	printCmd    struct{}
 	loginCmd    struct{}
 	statusCmd   struct{}
+	logoutCmd   struct{}
 	helpCmd     struct{}
 	usageErrCmd struct{ reason string }
 )
@@ -92,6 +94,7 @@ type (
 func (printCmd) isCommand()    {}
 func (loginCmd) isCommand()    {}
 func (statusCmd) isCommand()   {}
+func (logoutCmd) isCommand()   {}
 func (helpCmd) isCommand()     {}
 func (usageErrCmd) isCommand() {}
 
@@ -112,6 +115,8 @@ func parseCommand(args []string) command {
 		cmd = loginCmd{}
 	case "status":
 		cmd = statusCmd{}
+	case "logout":
+		cmd = logoutCmd{}
 	case "help", "-h", "-help", "--help":
 		cmd = helpCmd{}
 	default:
@@ -127,6 +132,7 @@ const usage = `Usage:
   az-devops-token print    print a vso.packaging access token to stdout
   az-devops-token login    sign in interactively (once per machine)
   az-devops-token status   show the signed-in account and token expiry
+  az-devops-token logout   delete the cached sign-in
   az-devops-token --help   show this help
 `
 
@@ -163,6 +169,21 @@ type actions struct {
 	printToken func(stdout, stderr io.Writer) int
 	login      func(stderr io.Writer) int
 	status     func(stdout, stderr io.Writer) int
+	logout     func(stdout, stderr io.Writer) int
+}
+
+/*
+logoutReport renders the outcome of deleting the token cache for `logout`. A
+cache that is already gone counts as success, so logging out is idempotent.
+*/
+func logoutReport(removeErr error, cache string) (stdout, stderr string, code int) {
+	switch {
+	case removeErr == nil:
+		return fmt.Sprintf("signed out\ncache %s removed\n", cache), "", 0
+	case errors.Is(removeErr, fs.ErrNotExist):
+		return fmt.Sprintf("already signed out\ncache %s\n", cache), "", 0
+	}
+	return "", fmt.Sprintf("logout failed: %v\ncache %s\n", removeErr, cache), 1
 }
 
 /*
@@ -241,6 +262,16 @@ func msalActions() actions {
 			fmt.Fprint(stderr, errOut)
 			return code
 		},
+		// logout deletes the whole cache rather than asking MSAL to remove the
+		// account, so it drops the refresh token even when the client and tenant
+		// IDs are not configured.
+		logout: func(stdout, stderr io.Writer) int {
+			path := cachePath()
+			out, errOut, code := logoutReport(os.Remove(path), path)
+			fmt.Fprint(stdout, out)
+			fmt.Fprint(stderr, errOut)
+			return code
+		},
 	}
 }
 
@@ -257,6 +288,8 @@ func run(args []string, stdout, stderr io.Writer, act actions) int {
 		return act.login(stderr)
 	case statusCmd:
 		return act.status(stdout, stderr)
+	case logoutCmd:
+		return act.logout(stdout, stderr)
 	case printCmd:
 		return act.printToken(stdout, stderr)
 	default:

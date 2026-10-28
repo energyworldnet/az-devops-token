@@ -31,9 +31,9 @@ The printed token has a guaranteed minimum remaining lifetime (currently
 refresh first. A caller can therefore cache it for any shorter interval (e.g.
 mise's `env_cache_ttl`) without risking an expired credential.
 
-Only `print` writes a token. `--help` (or `-h`, `help`) prints usage, and any
-other invocation, including one with no arguments, prints usage to stderr and
-exits `2`, so probing the CLI never writes a credential to stdout.
+Only `print` writes a token. `--help` (or `-h`, `help`) prints usage, and a
+missing or unrecognized command prints usage to stderr and exits `2`, so
+probing the CLI never writes a credential to stdout.
 
 The `print` invocation always exits `0`. With no valid login it prints nothing
 to stdout and a hint to stderr, so callers (e.g. mise `[env]`) degrade to a
@@ -50,6 +50,17 @@ the token's expiry and the cache path instead of the token. It exits `0` when
 a token is available and `1` otherwise, saying whether no one is signed in or
 the acquisition itself failed (a network error, or an expired sign-in that
 needs another `login`).
+
+To drop the cached sign-in, for example to switch accounts:
+
+```sh
+az-devops-token logout
+```
+
+`logout` deletes the cache file described under [Cache](#cache), refresh token
+included, and exits `0` whether or not one existed. It does not revoke the
+refresh token in Entra; if the cache itself was exposed, also revoke your
+sign-in sessions there.
 
 ## Configuration
 
