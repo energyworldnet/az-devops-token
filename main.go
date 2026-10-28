@@ -196,6 +196,21 @@ func logoutReport(removeErr error, cache string) (stdout, stderr string, code in
 }
 
 /*
+printReport renders the outcome of a silent acquisition for `print`. It always
+exits 0: a missing token must degrade to empty output so mise's config load and
+the consuming package manager fall through to a clean 401 rather than erroring.
+*/
+func printReport(res public.AuthResult, err error) (stdout, stderr string, code int) {
+	switch {
+	case errors.Is(err, token.ErrNotSignedIn):
+		return "", "no token — run `az-devops-token login`\n", 0
+	case err != nil:
+		return "", fmt.Sprintf("no token — %v\n", err), 0
+	}
+	return res.AccessToken, "", 0
+}
+
+/*
 statusReport renders the outcome of a silent acquisition for `status`. It
 receives the whole AuthResult but writes only what formatStatus derives from
 it, so the access token reaches neither stream.
@@ -221,67 +236,87 @@ func formatStatus(username string, expiresOn, now time.Time, cache string) strin
 		username, expiresOn.UTC().Format(time.RFC3339), remaining, cache)
 }
 
+// msalActions wires run to the commands that use MSAL and the network.
 func msalActions() actions {
 	return actions{
-		printToken: func(stdout, stderr io.Writer) int {
-			app, fc, err := newSession()
-			if err != nil {
-				fmt.Fprintf(stderr, "%v\n", err)
-				return 0
-			}
-			res, err := acquireSilently(app, fc)
-			switch {
-			case err == nil:
-				fmt.Fprint(stdout, res.AccessToken)
-			case errors.Is(err, token.ErrNotSignedIn):
-				// No usable token — degrade to empty output so mise's config load and the
-				// consuming package manager fall through to a clean 401 rather than erroring.
-				fmt.Fprintln(stderr, "no token — run `az-devops-token login`")
-			default:
-				fmt.Fprintf(stderr, "no token — %v\n", err)
-			}
-			return 0
-		},
-		login: func(stderr io.Writer) int {
-			app, fc, err := newSession()
-			if err != nil {
-				fmt.Fprintf(stderr, "%v\n", err)
-				return 1
-			}
-			if _, err := acquireSilently(app, fc); err == nil {
-				fmt.Fprintln(stderr, "already signed in")
-				return 0
-			}
-			if err := interactiveLogin(context.Background(), app); err != nil {
-				fmt.Fprintf(stderr, "login failed: %v\n", err)
-				return 1
-			}
-			fmt.Fprintln(stderr, "signed in")
-			return 0
-		},
-		status: func(stdout, stderr io.Writer) int {
-			app, fc, err := newSession()
-			if err != nil {
-				fmt.Fprintf(stderr, "%v\n", err)
-				return 1
-			}
-			res, err := acquireSilently(app, fc)
-			out, errOut, code := statusReport(res, err, time.Now(), fc.Path)
-			fmt.Fprint(stdout, out)
-			fmt.Fprint(stderr, errOut)
-			return code
-		},
-		// logout deletes the whole cache rather than asking MSAL to remove the
-		// account, so it drops the refresh token even when the client and tenant
-		// IDs are not configured.
-		logout: func(stdout, stderr io.Writer) int {
-			path := cachePath()
-			out, errOut, code := logoutReport(os.Remove(path), path)
-			fmt.Fprint(stdout, out)
-			fmt.Fprint(stderr, errOut)
-			return code
-		},
+		login:      login,
+		logout:     logout,
+		printToken: printToken,
+		status:     status,
 	}
+}
+
+/*
+printToken writes the access token to stdout. It always exits 0; see
+printReport.
+*/
+func printToken(stdout, stderr io.Writer) int {
+	out, errOut, code := printReport(acquire())
+	fmt.Fprint(stdout, out)
+	fmt.Fprint(stderr, errOut)
+	return code
+}
+
+/*
+acquire builds the session and acquires silently, reporting missing
+configuration as an acquisition error. Only `print` uses it: `status` and
+`login` report missing configuration on its own, since signing in cannot fix it.
+*/
+func acquire() (public.AuthResult, error) {
+	app, fc, err := newSession()
+	if err != nil {
+		return public.AuthResult{}, err
+	}
+	return acquireSilently(app, fc)
+}
+
+/*
+login opens the browser for sign-in unless a silent acquisition already
+succeeds.
+*/
+func login(stderr io.Writer) int {
+	app, fc, err := newSession()
+	if err != nil {
+		fmt.Fprintf(stderr, "%v\n", err)
+		return 1
+	}
+	if _, err := acquireSilently(app, fc); err == nil {
+		fmt.Fprintln(stderr, "already signed in")
+		return 0
+	}
+	if err := interactiveLogin(context.Background(), app); err != nil {
+		fmt.Fprintf(stderr, "login failed: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stderr, "signed in")
+	return 0
+}
+
+// status describes the signed-in account and token expiry.
+func status(stdout, stderr io.Writer) int {
+	app, fc, err := newSession()
+	if err != nil {
+		fmt.Fprintf(stderr, "%v\n", err)
+		return 1
+	}
+	res, err := acquireSilently(app, fc)
+	out, errOut, code := statusReport(res, err, time.Now(), fc.Path)
+	fmt.Fprint(stdout, out)
+	fmt.Fprint(stderr, errOut)
+	return code
+}
+
+/*
+logout deletes the whole cache rather than asking MSAL to remove the
+account, so it drops the refresh token even when the client and tenant IDs
+are not configured.
+*/
+func logout(stdout, stderr io.Writer) int {
+	path := cachePath()
+	out, errOut, code := logoutReport(os.Remove(path), path)
+	fmt.Fprint(stdout, out)
+	fmt.Fprint(stderr, errOut)
+	return code
 }
 
 // run executes the command the arguments select and returns the exit code.
