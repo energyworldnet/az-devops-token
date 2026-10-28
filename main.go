@@ -23,6 +23,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/AzureAD/microsoft-authentication-library-for-go/apps/public"
@@ -82,12 +83,14 @@ type command interface{ isCommand() }
 type (
 	printCmd    struct{}
 	loginCmd    struct{}
+	statusCmd   struct{}
 	helpCmd     struct{}
 	usageErrCmd struct{ reason string }
 )
 
 func (printCmd) isCommand()    {}
 func (loginCmd) isCommand()    {}
+func (statusCmd) isCommand()   {}
 func (helpCmd) isCommand()     {}
 func (usageErrCmd) isCommand() {}
 
@@ -106,6 +109,8 @@ func parseCommand(args []string) command {
 		cmd = printCmd{}
 	case "login":
 		cmd = loginCmd{}
+	case "status":
+		cmd = statusCmd{}
 	case "help", "-h", "-help", "--help":
 		cmd = helpCmd{}
 	default:
@@ -120,6 +125,7 @@ func parseCommand(args []string) command {
 const usage = `Usage:
   az-devops-token print    print a vso.packaging access token to stdout
   az-devops-token login    sign in interactively (once per machine)
+  az-devops-token status   show the signed-in account and token expiry
   az-devops-token --help   show this help
 `
 
@@ -153,6 +159,17 @@ func silentSession() (app public.Client, res public.AuthResult, ok bool, err err
 type actions struct {
 	printToken func(stdout, stderr io.Writer) int
 	login      func(stderr io.Writer) int
+	status     func(stdout, stderr io.Writer) int
+}
+
+/*
+formatStatus describes a usable login without the token itself, so checking
+that the tool works never puts a credential on screen or in a transcript.
+*/
+func formatStatus(username string, expiresOn, now time.Time, cache string) string {
+	remaining := strings.TrimSuffix(expiresOn.Sub(now).Truncate(time.Minute).String(), "0s")
+	return fmt.Sprintf("signed in as %s\ntoken expires %s (in %s)\ncache %s\n",
+		username, expiresOn.UTC().Format(time.RFC3339), remaining, cache)
 }
 
 func msalActions() actions {
@@ -188,6 +205,19 @@ func msalActions() actions {
 			fmt.Fprintln(stderr, "signed in")
 			return 0
 		},
+		status: func(stdout, stderr io.Writer) int {
+			_, res, ok, err := silentSession()
+			switch {
+			case err != nil:
+				fmt.Fprintf(stderr, "%v\n", err)
+				return 1
+			case !ok:
+				fmt.Fprintf(stderr, "not signed in — run `az-devops-token login`\ncache %s\n", cachePath())
+				return 1
+			}
+			fmt.Fprint(stdout, formatStatus(res.Account.PreferredUsername, res.ExpiresOn, time.Now(), cachePath()))
+			return 0
+		},
 	}
 }
 
@@ -202,6 +232,8 @@ func run(args []string, stdout, stderr io.Writer, act actions) int {
 		return 2
 	case loginCmd:
 		return act.login(stderr)
+	case statusCmd:
+		return act.status(stdout, stderr)
 	case printCmd:
 		return act.printToken(stdout, stderr)
 	default:

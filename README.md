@@ -39,6 +39,16 @@ The `print` invocation always exits `0`. With no valid login it prints nothing
 to stdout and a hint to stderr, so callers (e.g. mise `[env]`) degrade to a
 clean `401` rather than erroring.
 
+To check that sign-in works without printing a token:
+
+```sh
+az-devops-token status
+```
+
+`status` acquires a token the same way `print` does, then reports the account,
+the token's expiry and the cache path instead of the token. It exits `0` when
+a token is available and `1` when you need to `login`.
+
 ## Configuration
 
 The Entra public-client app registration is identified by:
