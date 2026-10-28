@@ -136,16 +136,16 @@ func interactiveLogin(ctx context.Context, app public.Client) error {
 // user interaction. A cached/refreshable token satisfies both commands: it's
 // what `print` emits, and it makes `login` idempotent (no prompt when already
 // signed in).
-func silentSession() (app public.Client, tok string, ok bool, err error) {
+func silentSession() (app public.Client, res public.AuthResult, ok bool, err error) {
 	fc := &token.FileCache{Path: cachePath()}
 	app, err = newApp(fc)
 	if err != nil {
-		return public.Client{}, "", false, err
+		return public.Client{}, public.AuthResult{}, false, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	tok, ok = token.Silent(ctx, app, fc)
-	return app, tok, ok, nil
+	res, ok = token.Silent(ctx, app, fc)
+	return app, res, ok, nil
 }
 
 // actions are the commands that need MSAL and the network, passed to run as
@@ -158,12 +158,12 @@ type actions struct {
 func msalActions() actions {
 	return actions{
 		printToken: func(stdout, stderr io.Writer) int {
-			_, tok, ok, err := silentSession()
+			_, res, ok, err := silentSession()
 			switch {
 			case err != nil:
 				fmt.Fprintf(stderr, "%v\n", err)
 			case ok:
-				fmt.Fprint(stdout, tok)
+				fmt.Fprint(stdout, res.AccessToken)
 			default:
 				// No usable token — degrade to empty output so mise's config load and the
 				// consuming package manager fall through to a clean 401 rather than erroring.

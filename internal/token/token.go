@@ -100,32 +100,33 @@ func NeedsForcedRefresh(expiresOn, now time.Time) bool {
 	return expiresOn.Sub(now) < MinLifetime
 }
 
-// Silent returns a cached or silently-refreshed access token, if the account
-// has a prior login that is still valid or refreshable. The returned token is
-// guaranteed to have at least MinLifetime remaining: MSAL refreshes proactively
-// only when Entra sends refresh_in, so when it doesn't, the cached token is
-// returned until it actually expires. If the token is inside that window, Silent
-// forces a refresh-token grant by hiding the cached access token (see FileCache).
-func Silent(ctx context.Context, app public.Client, fc *FileCache) (string, bool) {
+// Silent returns a cached or silently-refreshed access token, with the account
+// and expiry it was issued for, if the account has a prior login that is still
+// valid or refreshable. The returned token is guaranteed to have at least
+// MinLifetime remaining: MSAL refreshes proactively only when Entra sends
+// refresh_in, so when it doesn't, the cached token is returned until it
+// actually expires. If the token is inside that window, Silent forces a
+// refresh-token grant by hiding the cached access token (see FileCache).
+func Silent(ctx context.Context, app public.Client, fc *FileCache) (public.AuthResult, bool) {
 	accounts, err := app.Accounts(ctx)
 	if err != nil || len(accounts) == 0 {
-		return "", false
+		return public.AuthResult{}, false
 	}
 	acct := accounts[0]
 
 	res, err := app.AcquireTokenSilent(ctx, Scopes(), public.WithSilentAccount(acct))
 	if err != nil {
-		return "", false
+		return public.AuthResult{}, false
 	}
 	if !NeedsForcedRefresh(res.ExpiresOn, time.Now()) {
-		return res.AccessToken, true
+		return res, true
 	}
 
 	fc.DropAccessTokens = true
 	defer func() { fc.DropAccessTokens = false }()
 	res, err = app.AcquireTokenSilent(ctx, Scopes(), public.WithSilentAccount(acct))
 	if err != nil {
-		return "", false
+		return public.AuthResult{}, false
 	}
-	return res.AccessToken, true
+	return res, true
 }
