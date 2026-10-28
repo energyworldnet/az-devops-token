@@ -21,7 +21,7 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@v5
         with:
           install: false
       - name: Install and run az-devops-token
