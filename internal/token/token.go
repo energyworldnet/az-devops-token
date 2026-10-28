@@ -100,32 +100,40 @@ func NeedsForcedRefresh(expiresOn, now time.Time) bool {
 	return expiresOn.Sub(now) < MinLifetime
 }
 
-// Silent returns a cached or silently-refreshed access token, if the account
-// has a prior login that is still valid or refreshable. The returned token is
-// guaranteed to have at least MinLifetime remaining: MSAL refreshes proactively
-// only when Entra sends refresh_in, so when it doesn't, the cached token is
-// returned until it actually expires. If the token is inside that window, Silent
-// forces a refresh-token grant by hiding the cached access token (see FileCache).
-func Silent(ctx context.Context, app public.Client, fc *FileCache) (string, bool) {
+// ErrNotSignedIn reports that the cache holds no account, so only an
+// interactive login can produce a token.
+var ErrNotSignedIn = errors.New("not signed in")
+
+// Silent returns a cached or silently-refreshed access token, with the account
+// and expiry it was issued for, if the account has a prior login that is still
+// valid or refreshable. It returns ErrNotSignedIn when the cache holds no
+// account, and wraps any other failure, such as an unreachable network or an
+// expired refresh token, which MSAL does not tell apart reliably.
+//
+// The returned token is guaranteed to have at least MinLifetime remaining:
+// MSAL refreshes proactively only when Entra sends refresh_in, so when it
+// doesn't, the cached token is returned until it actually expires. If the
+// token is inside that window, Silent forces a refresh-token grant by hiding
+// the cached access token (see FileCache).
+func Silent(ctx context.Context, app public.Client, fc *FileCache) (public.AuthResult, error) {
 	accounts, err := app.Accounts(ctx)
-	if err != nil || len(accounts) == 0 {
-		return "", false
+	if err != nil {
+		return public.AuthResult{}, fmt.Errorf("read cached accounts: %w", err)
+	}
+	if len(accounts) == 0 {
+		return public.AuthResult{}, ErrNotSignedIn
 	}
 	acct := accounts[0]
 
 	res, err := app.AcquireTokenSilent(ctx, Scopes(), public.WithSilentAccount(acct))
 	if err != nil {
-		return "", false
+		return public.AuthResult{}, err
 	}
 	if !NeedsForcedRefresh(res.ExpiresOn, time.Now()) {
-		return res.AccessToken, true
+		return res, nil
 	}
 
 	fc.DropAccessTokens = true
 	defer func() { fc.DropAccessTokens = false }()
-	res, err = app.AcquireTokenSilent(ctx, Scopes(), public.WithSilentAccount(acct))
-	if err != nil {
-		return "", false
-	}
-	return res.AccessToken, true
+	return app.AcquireTokenSilent(ctx, Scopes(), public.WithSilentAccount(acct))
 }

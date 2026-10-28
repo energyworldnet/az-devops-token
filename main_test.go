@@ -2,10 +2,16 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/AzureAD/microsoft-authentication-library-for-go/apps/public"
+	"github.com/energyworldnet/az-devops-token/internal/token"
 )
 
 // fakeActions stands in for MSAL: printToken emits a sentinel token, so a
@@ -21,6 +27,87 @@ func fakeActions() actions {
 			fmt.Fprint(stderr, "signed in")
 			return 4
 		},
+		status: func(stdout, _ io.Writer) int {
+			fmt.Fprint(stdout, "STATUS")
+			return 5
+		},
+	}
+}
+
+func TestStatusReport(t *testing.T) {
+	now := time.Date(2026, 10, 28, 17, 0, 0, 0, time.UTC)
+	signedIn := public.AuthResult{
+		AccessToken: "SECRET",
+		Account:     public.Account{PreferredUsername: "alice@example.com"},
+		ExpiresOn:   now.Add(30 * time.Minute),
+	}
+	cases := []struct {
+		name       string
+		res        public.AuthResult
+		err        error
+		wantStdout string
+		wantStderr string
+		wantCode   int
+	}{
+		{
+			name: "signed in",
+			res:  signedIn,
+			wantStdout: "signed in as alice@example.com\n" +
+				"token expires 2026-10-28T17:30:00Z (in 30m)\n" +
+				"cache /c.json\n",
+			wantCode: 0,
+		},
+		{
+			name:       "not signed in",
+			err:        token.ErrNotSignedIn,
+			wantStderr: "not signed in — run `az-devops-token login`\ncache /c.json\n",
+			wantCode:   1,
+		},
+		{
+			name: "acquisition failed",
+			err:  errors.New("network unreachable"),
+			wantStderr: "token acquisition failed: network unreachable\n" +
+				"if your sign-in expired, run `az-devops-token login`\n" +
+				"cache /c.json\n",
+			wantCode: 1,
+		},
+	}
+	for _, c := range cases {
+		stdout, stderr, code := statusReport(c.res, c.err, now, "/c.json")
+		if stdout != c.wantStdout || stderr != c.wantStderr || code != c.wantCode {
+			t.Errorf("%s: statusReport = %q, %q, %d; want %q, %q, %d",
+				c.name, stdout, stderr, code, c.wantStdout, c.wantStderr, c.wantCode)
+		}
+		if strings.Contains(stdout+stderr, "SECRET") {
+			t.Errorf("%s: statusReport leaked the access token", c.name)
+		}
+	}
+}
+
+func TestFormatStatus(t *testing.T) {
+	now := time.Date(2026, 10, 28, 17, 0, 0, 0, time.UTC)
+	cases := []struct {
+		expiresOn time.Time
+		want      string
+	}{
+		{
+			now.Add(58*time.Minute + 30*time.Second),
+			"signed in as alice@example.com\n" +
+				"token expires 2026-10-28T17:58:30Z (in 58m)\n" +
+				"cache /home/alice/.cache/az-devops-token.json\n",
+		},
+		{
+			now.Add(75 * time.Minute),
+			"signed in as alice@example.com\n" +
+				"token expires 2026-10-28T18:15:00Z (in 1h15m)\n" +
+				"cache /home/alice/.cache/az-devops-token.json\n",
+		},
+	}
+	for _, c := range cases {
+		got := formatStatus("alice@example.com", c.expiresOn, now, "/home/alice/.cache/az-devops-token.json")
+		if got != c.want {
+			t.Errorf("formatStatus(expires %v) = %q, want %q", c.expiresOn, got, c.want)
+		}
 	}
 }
 
@@ -34,6 +121,7 @@ func TestRun(t *testing.T) {
 		{nil, 2, "", "az-devops-token: missing command\n\n" + usage},
 		{[]string{"print"}, 3, "SECRET", ""},
 		{[]string{"login"}, 4, "", "signed in"},
+		{[]string{"status"}, 5, "STATUS", ""},
 		{[]string{"--help"}, 0, usage, ""},
 		{[]string{"--version"}, 2, "", "az-devops-token: unknown argument \"--version\"\n\n" + usage},
 		{[]string{"print", "extra"}, 2, "", "az-devops-token: unexpected argument \"extra\" after print\n\n" + usage},
@@ -57,6 +145,8 @@ func TestParseCommand(t *testing.T) {
 		{[]string{"print"}, printCmd{}},
 		{[]string{"print", "--help"}, usageErrCmd{reason: `unexpected argument "--help" after print`}},
 		{[]string{"login"}, loginCmd{}},
+		{[]string{"status"}, statusCmd{}},
+		{[]string{"status", "extra"}, usageErrCmd{reason: `unexpected argument "extra" after status`}},
 		{[]string{"help"}, helpCmd{}},
 		{[]string{"-h"}, helpCmd{}},
 		{[]string{"--help"}, helpCmd{}},
