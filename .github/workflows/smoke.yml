@@ -1,8 +1,8 @@
 name: Smoke
 
 # Verifies the released binary installs and runs via mise's github backend on
-# every supported OS — i.e. that the per-platform release assets and the `exe`
-# option resolve on Linux/macOS/Windows, not just where it was built.
+# every supported OS — i.e. that the per-platform release assets and the
+# binary resolve on Linux/macOS/Windows, not just where it was built.
 
 on:
   release:
@@ -29,10 +29,10 @@ jobs:
         run: |
           ver="${{ github.event.inputs.version || github.event.release.tag_name || 'latest' }}"
           ver="${ver#v}"
-          mise use -g "github:energyworldnet/az-devops-token[exe=az-devops-token]@${ver}"
+          mise use -g "github:energyworldnet/az-devops-token@${ver}"
           # No login on the runner, so the binary prints its own "no token"
-          # message and exits 0 — which still proves the asset match + exe
-          # resolution and that the binary runs on this OS.
+          # message and exits 0 — which still proves the asset match, the
+          # binary's resolution, and that it runs on this OS.
           out="$(mise exec -- az-devops-token print 2>&1 || true)"
           echo "output: $out"
           echo "$out" | grep -q "no token" || { echo "::error::binary did not resolve or run"; exit 1; }
