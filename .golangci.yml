@@ -1,0 +1,16 @@
+version: "2"
+
+formatters:
+  enable:
+    - gofumpt
+
+linters:
+  # The standard set (errcheck, govet, ineffassign, staticcheck, unused) plus:
+  enable:
+    - errorlint
+    - gosec
+    - revive
+  exclusions:
+    presets:
+      # A CLI has nowhere to report a failed write to stdout/stderr.
+      - std-error-handling
