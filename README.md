@@ -31,9 +31,9 @@ The printed token has a guaranteed minimum remaining lifetime (currently
 refresh first. A caller can therefore cache it for any shorter interval (e.g.
 mise's `env_cache_ttl`) without risking an expired credential.
 
-Only `print` writes a token. `--help` (or `-h`, `help`) prints usage, and any
-other invocation, including one with no arguments, prints usage to stderr and
-exits `2`, so probing the CLI never writes a credential to stdout.
+Only `print` writes a token. `--help` (or `-h`, `help`) prints usage, and a
+missing or unrecognized command prints usage to stderr and exits `2`, so
+probing the CLI never writes a credential to stdout.
 
 The `print` invocation always exits `0`. With no valid login it prints nothing
 to stdout and a hint to stderr, so callers (e.g. mise `[env]`) degrade to a
