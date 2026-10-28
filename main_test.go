@@ -1,9 +1,51 @@
 package main
 
 import (
+	"bytes"
+	"fmt"
+	"io"
 	"reflect"
 	"testing"
 )
+
+// fakeActions stands in for MSAL: printToken emits a sentinel token, so a
+// dispatch bug that routes to it shows up on stdout.
+func fakeActions() actions {
+	return actions{
+		printToken: func(stdout, _ io.Writer) int {
+			fmt.Fprint(stdout, "SECRET")
+			return 0
+		},
+		login: func(stderr io.Writer) int {
+			fmt.Fprint(stderr, "signed in")
+			return 0
+		},
+	}
+}
+
+func TestRun(t *testing.T) {
+	cases := []struct {
+		args       []string
+		wantCode   int
+		wantStdout string
+		wantStderr string
+	}{
+		{nil, 0, "SECRET", ""},
+		{[]string{"print"}, 0, "SECRET", ""},
+		{[]string{"login"}, 0, "", "signed in"},
+		{[]string{"--help"}, 0, usage, ""},
+		{[]string{"--version"}, 2, "", "az-devops-token: unknown argument \"--version\"\n\n" + usage},
+		{[]string{"print", "extra"}, 2, "", "az-devops-token: unexpected argument \"extra\" after print\n\n" + usage},
+	}
+	for _, c := range cases {
+		var stdout, stderr bytes.Buffer
+		code := run(c.args, &stdout, &stderr, fakeActions())
+		if code != c.wantCode || stdout.String() != c.wantStdout || stderr.String() != c.wantStderr {
+			t.Errorf("run(%q) = %d, stdout %q, stderr %q; want %d, %q, %q",
+				c.args, code, stdout.String(), stderr.String(), c.wantCode, c.wantStdout, c.wantStderr)
+		}
+	}
+}
 
 func TestParseCommand(t *testing.T) {
 	cases := []struct {
