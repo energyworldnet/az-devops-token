@@ -75,6 +75,52 @@ func newApp(fc *token.FileCache) (public.Client, error) {
 	)
 }
 
+// command is the invocation selected by the arguments. Only printCmd writes a
+// token to stdout.
+type command interface{ isCommand() }
+
+type (
+	printCmd    struct{}
+	loginCmd    struct{}
+	helpCmd     struct{}
+	usageErrCmd struct{ reason string }
+)
+
+func (printCmd) isCommand()    {}
+func (loginCmd) isCommand()    {}
+func (helpCmd) isCommand()     {}
+func (usageErrCmd) isCommand() {}
+
+/*
+parseCommand maps arguments to a command. Printing a token requires an empty
+argument list: anything unrecognized must fail closed, because a caller probing
+with `--help` or `--version` would otherwise get a live token on stdout.
+*/
+func parseCommand(args []string) command {
+	if len(args) == 0 {
+		return printCmd{}
+	}
+	var cmd command
+	switch args[0] {
+	case "login":
+		cmd = loginCmd{}
+	case "help", "-h", "-help", "--help":
+		cmd = helpCmd{}
+	default:
+		return usageErrCmd{reason: fmt.Sprintf("unknown argument %q", args[0])}
+	}
+	if len(args) > 1 {
+		return usageErrCmd{reason: fmt.Sprintf("unexpected argument %q after %s", args[1], args[0])}
+	}
+	return cmd
+}
+
+const usage = `Usage:
+  az-devops-token          print a vso.packaging access token to stdout
+  az-devops-token login    sign in interactively (once per machine)
+  az-devops-token --help   show this help
+`
+
 // interactiveLogin opens the system browser for sign-in. Unlike the device-code
 // flow, a browser sign-in carries the machine's Entra device identity via SSO, so
 // it satisfies Conditional Access policies that require a registered/compliant
@@ -85,7 +131,18 @@ func interactiveLogin(ctx context.Context, app public.Client) error {
 }
 
 func main() {
-	login := len(os.Args) > 1 && os.Args[1] == "login"
+	var login bool
+	switch cmd := parseCommand(os.Args[1:]).(type) {
+	case helpCmd:
+		fmt.Print(usage)
+		return
+	case usageErrCmd:
+		fmt.Fprintf(os.Stderr, "az-devops-token: %s\n\n%s", cmd.reason, usage)
+		os.Exit(2)
+	case loginCmd:
+		login = true
+	case printCmd:
+	}
 
 	fc := &token.FileCache{Path: cachePath()}
 	app, err := newApp(fc)
