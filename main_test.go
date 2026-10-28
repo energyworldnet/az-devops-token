@@ -2,11 +2,15 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/AzureAD/microsoft-authentication-library-for-go/apps/public"
 )
 
 // fakeActions stands in for MSAL: printToken emits a sentinel token, so a
@@ -26,6 +30,55 @@ func fakeActions() actions {
 			fmt.Fprint(stdout, "STATUS")
 			return 5
 		},
+	}
+}
+
+func TestStatusReport(t *testing.T) {
+	now := time.Date(2026, 10, 28, 17, 0, 0, 0, time.UTC)
+	signedIn := public.AuthResult{
+		AccessToken: "SECRET",
+		Account:     public.Account{PreferredUsername: "alice@example.com"},
+		ExpiresOn:   now.Add(30 * time.Minute),
+	}
+	cases := []struct {
+		name       string
+		res        public.AuthResult
+		ok         bool
+		err        error
+		wantStdout string
+		wantStderr string
+		wantCode   int
+	}{
+		{
+			name: "signed in",
+			res:  signedIn,
+			ok:   true,
+			wantStdout: "signed in as alice@example.com\n" +
+				"token expires 2026-10-28T17:30:00Z (in 30m)\n" +
+				"cache /c.json\n",
+			wantCode: 0,
+		},
+		{
+			name:       "not signed in",
+			wantStderr: "not signed in — run `az-devops-token login`\ncache /c.json\n",
+			wantCode:   1,
+		},
+		{
+			name:       "misconfigured",
+			err:        errors.New("client/tenant ID not configured"),
+			wantStderr: "client/tenant ID not configured\n",
+			wantCode:   1,
+		},
+	}
+	for _, c := range cases {
+		stdout, stderr, code := statusReport(c.res, c.ok, c.err, now, "/c.json")
+		if stdout != c.wantStdout || stderr != c.wantStderr || code != c.wantCode {
+			t.Errorf("%s: statusReport = %q, %q, %d; want %q, %q, %d",
+				c.name, stdout, stderr, code, c.wantStdout, c.wantStderr, c.wantCode)
+		}
+		if strings.Contains(stdout+stderr, "SECRET") {
+			t.Errorf("%s: statusReport leaked the access token", c.name)
+		}
 	}
 }
 

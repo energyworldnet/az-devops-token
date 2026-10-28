@@ -163,6 +163,21 @@ type actions struct {
 }
 
 /*
+statusReport renders the outcome of a silent acquisition for `status`. It
+receives the whole AuthResult but writes only what formatStatus derives from
+it, so the access token reaches neither stream.
+*/
+func statusReport(res public.AuthResult, ok bool, err error, now time.Time, cache string) (stdout, stderr string, code int) {
+	switch {
+	case err != nil:
+		return "", fmt.Sprintf("%v\n", err), 1
+	case !ok:
+		return "", fmt.Sprintf("not signed in — run `az-devops-token login`\ncache %s\n", cache), 1
+	}
+	return formatStatus(res.Account.PreferredUsername, res.ExpiresOn, now, cache), "", 0
+}
+
+/*
 formatStatus describes a usable login without the token itself, so checking
 that the tool works never puts a credential on screen or in a transcript.
 */
@@ -207,16 +222,10 @@ func msalActions() actions {
 		},
 		status: func(stdout, stderr io.Writer) int {
 			_, res, ok, err := silentSession()
-			switch {
-			case err != nil:
-				fmt.Fprintf(stderr, "%v\n", err)
-				return 1
-			case !ok:
-				fmt.Fprintf(stderr, "not signed in — run `az-devops-token login`\ncache %s\n", cachePath())
-				return 1
-			}
-			fmt.Fprint(stdout, formatStatus(res.Account.PreferredUsername, res.ExpiresOn, time.Now(), cachePath()))
-			return 0
+			out, errOut, code := statusReport(res, ok, err, time.Now(), cachePath())
+			fmt.Fprint(stdout, out)
+			fmt.Fprint(stderr, errOut)
+			return code
 		},
 	}
 }
