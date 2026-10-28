@@ -196,6 +196,21 @@ func logoutReport(removeErr error, cache string) (stdout, stderr string, code in
 }
 
 /*
+printReport renders the outcome of a silent acquisition for `print`. It always
+exits 0: a missing token must degrade to empty output so mise's config load and
+the consuming package manager fall through to a clean 401 rather than erroring.
+*/
+func printReport(res public.AuthResult, err error) (stdout, stderr string, code int) {
+	switch {
+	case errors.Is(err, token.ErrNotSignedIn):
+		return "", "no token — run `az-devops-token login`\n", 0
+	case err != nil:
+		return "", fmt.Sprintf("no token — %v\n", err), 0
+	}
+	return res.AccessToken, "", 0
+}
+
+/*
 statusReport renders the outcome of a silent acquisition for `status`. It
 receives the whole AuthResult but writes only what formatStatus derives from
 it, so the access token reaches neither stream.
@@ -239,18 +254,10 @@ func printToken(stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "%v\n", err)
 		return 0
 	}
-	res, err := acquireSilently(app, fc)
-	switch {
-	case err == nil:
-		fmt.Fprint(stdout, res.AccessToken)
-	case errors.Is(err, token.ErrNotSignedIn):
-		// No usable token — degrade to empty output so mise's config load and the
-		// consuming package manager fall through to a clean 401 rather than erroring.
-		fmt.Fprintln(stderr, "no token — run `az-devops-token login`")
-	default:
-		fmt.Fprintf(stderr, "no token — %v\n", err)
-	}
-	return 0
+	out, errOut, code := printReport(acquireSilently(app, fc))
+	fmt.Fprint(stdout, out)
+	fmt.Fprint(stderr, errOut)
+	return code
 }
 
 // login opens the browser for sign-in unless a silent acquisition already

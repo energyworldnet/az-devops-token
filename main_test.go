@@ -60,6 +60,29 @@ func TestLogoutReport(t *testing.T) {
 	}
 }
 
+// TestPrintReport pins the contract mise relies on: `print` exits 0 whatever
+// happens, and stdout carries the token or nothing at all.
+func TestPrintReport(t *testing.T) {
+	cases := []struct {
+		name       string
+		res        public.AuthResult
+		err        error
+		wantStdout string
+		wantStderr string
+	}{
+		{"signed in", public.AuthResult{AccessToken: "SECRET"}, nil, "SECRET", ""},
+		{"not signed in", public.AuthResult{}, token.ErrNotSignedIn, "", "no token — run `az-devops-token login`\n"},
+		{"acquisition failed", public.AuthResult{}, errors.New("network unreachable"), "", "no token — network unreachable\n"},
+	}
+	for _, c := range cases {
+		stdout, stderr, code := printReport(c.res, c.err)
+		if stdout != c.wantStdout || stderr != c.wantStderr || code != 0 {
+			t.Errorf("%s: printReport = %q, %q, %d; want %q, %q, 0",
+				c.name, stdout, stderr, code, c.wantStdout, c.wantStderr)
+		}
+	}
+}
+
 func TestStatusReport(t *testing.T) {
 	now := time.Date(2026, 10, 28, 17, 0, 0, 0, time.UTC)
 	signedIn := public.AuthResult{
