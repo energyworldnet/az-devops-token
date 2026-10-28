@@ -51,6 +51,17 @@ a token is available and `1` otherwise, saying whether no one is signed in or
 the acquisition itself failed (a network error, or an expired sign-in that
 needs another `login`).
 
+To drop the cached sign-in, for example to switch accounts:
+
+```sh
+az-devops-token logout
+```
+
+`logout` deletes the cache file described under [Cache](#cache), refresh token
+included, and exits `0` whether or not one existed. It does not revoke the
+refresh token in Entra; if the cache itself was exposed, also revoke your
+sign-in sessions there.
+
 ## Configuration
 
 The Entra public-client app registration is identified by:
