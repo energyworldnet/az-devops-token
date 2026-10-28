@@ -21,6 +21,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -133,54 +134,83 @@ func interactiveLogin(ctx context.Context, app public.Client) error {
 	return err
 }
 
-func main() {
-	var login bool
-	switch cmd := parseCommand(os.Args[1:]).(type) {
-	case helpCmd:
-		fmt.Print(usage)
-		return
-	case usageErrCmd:
-		fmt.Fprintf(os.Stderr, "az-devops-token: %s\n\n%s", cmd.reason, usage)
-		os.Exit(2)
-	case loginCmd:
-		login = true
-	case printCmd:
-	}
-
+// silentSession builds the MSAL client and tries to acquire a token without
+// user interaction. A cached/refreshable token satisfies both commands: it's
+// what `print` emits, and it makes `login` idempotent (no prompt when already
+// signed in).
+func silentSession() (app public.Client, tok string, ok bool, err error) {
 	fc := &token.FileCache{Path: cachePath()}
-	app, err := newApp(fc)
+	app, err = newApp(fc)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		if login {
-			os.Exit(1)
-		}
-		return
+		return public.Client{}, "", false, err
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	tok, ok = token.Silent(ctx, app, fc)
+	return app, tok, ok, nil
+}
 
-	// A cached/refreshable token satisfies both paths: it's what `print` emits,
-	// and it makes `login` idempotent (no prompt when already signed in).
-	silentCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	tok, ok := token.Silent(silentCtx, app, fc)
-	cancel()
-	if ok {
-		if login {
-			fmt.Fprintln(os.Stderr, "already signed in")
-			return
-		}
-		fmt.Print(tok)
-		return
-	}
+// actions are the commands that need MSAL and the network, passed to run as
+// functions so its dispatch can be tested without either.
+type actions struct {
+	printToken func(stdout, stderr io.Writer) int
+	login      func(stderr io.Writer) int
+}
 
-	if !login {
-		// No usable token — degrade to empty output so mise's config load and the
-		// consuming package manager fall through to a clean 401 rather than erroring.
-		fmt.Fprintln(os.Stderr, "no token — run `az-devops-token login`")
-		return
+func msalActions() actions {
+	return actions{
+		printToken: func(stdout, stderr io.Writer) int {
+			_, tok, ok, err := silentSession()
+			switch {
+			case err != nil:
+				fmt.Fprintf(stderr, "%v\n", err)
+			case ok:
+				fmt.Fprint(stdout, tok)
+			default:
+				// No usable token — degrade to empty output so mise's config load and the
+				// consuming package manager fall through to a clean 401 rather than erroring.
+				fmt.Fprintln(stderr, "no token — run `az-devops-token login`")
+			}
+			return 0
+		},
+		login: func(stderr io.Writer) int {
+			app, _, ok, err := silentSession()
+			if err != nil {
+				fmt.Fprintf(stderr, "%v\n", err)
+				return 1
+			}
+			if ok {
+				fmt.Fprintln(stderr, "already signed in")
+				return 0
+			}
+			if err := interactiveLogin(context.Background(), app); err != nil {
+				fmt.Fprintf(stderr, "login failed: %v\n", err)
+				return 1
+			}
+			fmt.Fprintln(stderr, "signed in")
+			return 0
+		},
 	}
+}
 
-	if err := interactiveLogin(context.Background(), app); err != nil {
-		fmt.Fprintf(os.Stderr, "login failed: %v\n", err)
-		os.Exit(1)
+// run executes the command the arguments select and returns the exit code.
+func run(args []string, stdout, stderr io.Writer, act actions) int {
+	switch cmd := parseCommand(args).(type) {
+	case helpCmd:
+		fmt.Fprint(stdout, usage)
+		return 0
+	case usageErrCmd:
+		fmt.Fprintf(stderr, "az-devops-token: %s\n\n%s", cmd.reason, usage)
+		return 2
+	case loginCmd:
+		return act.login(stderr)
+	case printCmd:
+		return act.printToken(stdout, stderr)
+	default:
+		panic(fmt.Sprintf("unhandled command %T", cmd))
 	}
-	fmt.Fprintln(os.Stderr, "signed in")
+}
+
+func main() {
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr, msalActions()))
 }
