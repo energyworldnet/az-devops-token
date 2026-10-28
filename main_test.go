@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -82,6 +83,28 @@ func TestPrintReport(t *testing.T) {
 			t.Errorf("%s: printReport = %q, %q, %d; want %q, %q, 0",
 				c.name, stdout, stderr, code, c.wantStdout, c.wantStderr)
 		}
+	}
+}
+
+/*
+TestPrintUnconfigured runs the real `print` action without client or tenant
+IDs. It fails before MSAL or the network is reached, so it still exits 0 with
+empty stdout.
+*/
+func TestPrintUnconfigured(t *testing.T) {
+	savedClient, savedTenant := clientID, tenantID
+	clientID, tenantID = "", ""
+	t.Cleanup(func() { clientID, tenantID = savedClient, savedTenant })
+	t.Setenv("AZURE_CLIENT_ID", "")
+	t.Setenv("AZURE_TENANT_ID", "")
+	t.Setenv("AZ_DEVOPS_TOKEN_CACHE", filepath.Join(t.TempDir(), "cache.json"))
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"print"}, &stdout, &stderr, msalActions())
+	wantStderr := "no token — client/tenant ID not configured (set AZURE_CLIENT_ID and AZURE_TENANT_ID)\n"
+	if code != 0 || stdout.String() != "" || stderr.String() != wantStderr {
+		t.Errorf("run(print) = %d, stdout %q, stderr %q; want 0, \"\", %q",
+			code, stdout.String(), stderr.String(), wantStderr)
 	}
 }
 
