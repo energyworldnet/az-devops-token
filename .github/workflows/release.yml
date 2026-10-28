@@ -16,12 +16,14 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Cross-compile
-        # Bake the Entra public-client app IDs into the binary from repo variables.
+        # Bake the Entra public-client app IDs (from repo variables) and the
+        # release tag into the binary.
         env:
           LDFLAGS: >-
             -s -w
             -X main.clientID=${{ vars.AZURE_CLIENT_ID }}
             -X main.tenantID=${{ vars.AZURE_TENANT_ID }}
+            -X main.version=${{ github.ref_name }}
         run: |
           mkdir -p dist
           for t in windows/amd64 windows/arm64 linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do

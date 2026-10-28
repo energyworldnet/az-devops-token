@@ -62,6 +62,9 @@ included, and exits `0` whether or not one existed. It does not revoke the
 refresh token in Entra; if the cache itself was exposed, also revoke your
 sign-in sessions there.
 
+`az-devops-token version` (or `--version`) prints the release the binary was
+built from, or `dev` for a local build.
+
 ## Configuration
 
 The Entra public-client app registration is identified by:
