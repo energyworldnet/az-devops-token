@@ -46,6 +46,8 @@ type FileCache struct {
 	DropAccessTokens bool
 }
 
+// Replace loads the on-disk cache into MSAL, treating a missing file as an
+// empty cache.
 func (c *FileCache) Replace(_ context.Context, u cache.Unmarshaler, _ cache.ReplaceHints) error {
 	data, err := os.ReadFile(c.Path)
 	if err != nil {
