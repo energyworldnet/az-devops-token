@@ -246,8 +246,10 @@ func msalActions() actions {
 	}
 }
 
-// printToken writes the access token to stdout. It always exits 0; see
-// printReport.
+/*
+printToken writes the access token to stdout. It always exits 0; see
+printReport.
+*/
 func printToken(stdout, stderr io.Writer) int {
 	out, errOut, code := printReport(acquire())
 	fmt.Fprint(stdout, out)
@@ -268,8 +270,10 @@ func acquire() (public.AuthResult, error) {
 	return acquireSilently(app, fc)
 }
 
-// login opens the browser for sign-in unless a silent acquisition already
-// succeeds.
+/*
+login opens the browser for sign-in unless a silent acquisition already
+succeeds.
+*/
 func login(stderr io.Writer) int {
 	app, fc, err := newSession()
 	if err != nil {
@@ -302,9 +306,11 @@ func status(stdout, stderr io.Writer) int {
 	return code
 }
 
-// logout deletes the whole cache rather than asking MSAL to remove the
-// account, so it drops the refresh token even when the client and tenant IDs
-// are not configured.
+/*
+logout deletes the whole cache rather than asking MSAL to remove the
+account, so it drops the refresh token even when the client and tenant IDs
+are not configured.
+*/
 func logout(stdout, stderr io.Writer) int {
 	path := cachePath()
 	out, errOut, code := logoutReport(os.Remove(path), path)

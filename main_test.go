@@ -60,8 +60,10 @@ func TestLogoutReport(t *testing.T) {
 	}
 }
 
-// TestPrintReport pins the contract mise relies on: `print` exits 0 whatever
-// happens, and stdout carries the token or nothing at all.
+/*
+TestPrintReport pins the contract mise relies on: `print` exits 0 whatever
+happens, and stdout carries the token or nothing at all.
+*/
 func TestPrintReport(t *testing.T) {
 	cases := []struct {
 		name       string
